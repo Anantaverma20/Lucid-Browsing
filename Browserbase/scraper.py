@@ -194,7 +194,7 @@ class WebScraper:
         return soup
     
     def _extract_article_links(self, soup: BeautifulSoup, base_url: str) -> List[Dict[str, str]]:
-        """Extract article links from the page."""
+        """Extract article links from the page with associated images."""
         article_links = []
         
         if not soup:
@@ -264,18 +264,46 @@ class WebScraper:
                     if any(skip in class_str for skip in skip_classes):
                         continue
                     
+                    # Find associated image for this link
+                    image_url = ""
+                    try:
+                        # Look for image within the link or in parent/sibling elements
+                        img_in_link = link.find('img')
+                        if img_in_link:
+                            src = (img_in_link.get('src') or 
+                                  img_in_link.get('data-src') or 
+                                  img_in_link.get('data-lazy-src') or 
+                                  img_in_link.get('data-original'))
+                            if src and not src.startswith('data:'):
+                                image_url = urljoin(base_url, src)
+                        else:
+                            # Check parent element for images
+                            parent = link.parent
+                            if parent:
+                                parent_img = parent.find('img')
+                                if parent_img:
+                                    src = (parent_img.get('src') or 
+                                          parent_img.get('data-src') or 
+                                          parent_img.get('data-lazy-src'))
+                                    if src and not src.startswith('data:'):
+                                        image_url = urljoin(base_url, src)
+                    except Exception:
+                        pass
+                    
                     # Only add if we have meaningful text or it looks like a content link
                     if text and len(text) > 3:
                         article_links.append({
                             "url": absolute_url,
-                            "title": text[:200]
+                            "title": text[:200],
+                            "image_url": image_url
                         })
                         seen_urls.add(absolute_url)
                     elif '/event' in absolute_url.lower() or '/article' in absolute_url.lower() or '/post' in absolute_url.lower():
                         # Include event/article/post links even without text
                         article_links.append({
                             "url": absolute_url,
-                            "title": text[:200] if text else "Link"
+                            "title": text[:200] if text else "Link",
+                            "image_url": image_url
                         })
                         seen_urls.add(absolute_url)
                         
@@ -610,7 +638,7 @@ class WebScraper:
                     except Exception:
                         body_text = ""
                     
-                    # Get all links directly from Playwright
+                    # Get all links directly from Playwright with associated images
                     try:
                         page_links = await page.evaluate("""
                             () => {
@@ -629,8 +657,35 @@ class WebScraper:
                                     seen.add(absoluteUrl);
                                     
                                     const text = link.innerText.trim() || link.textContent.trim() || link.getAttribute('title') || '';
+                                    
+                                    // Find associated image
+                                    let imageUrl = '';
+                                    const imgInLink = link.querySelector('img');
+                                    if (imgInLink) {
+                                        const src = imgInLink.src || imgInLink.getAttribute('data-src') || imgInLink.getAttribute('data-lazy-src');
+                                        if (src && !src.startsWith('data:')) {
+                                            imageUrl = new URL(src, window.location.href).href;
+                                        }
+                                    } else {
+                                        // Check parent for images
+                                        const parent = link.parentElement;
+                                        if (parent) {
+                                            const parentImg = parent.querySelector('img');
+                                            if (parentImg) {
+                                                const src = parentImg.src || parentImg.getAttribute('data-src');
+                                                if (src && !src.startsWith('data:')) {
+                                                    imageUrl = new URL(src, window.location.href).href;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    
                                     if (text.length > 3 || href.includes('/event') || href.includes('/article') || href.includes('/post')) {
-                                        links.push({url: absoluteUrl, title: text.substring(0, 200)});
+                                        links.push({
+                                            url: absoluteUrl, 
+                                            title: text.substring(0, 200),
+                                            image_url: imageUrl
+                                        });
                                     }
                                 });
                                 
@@ -639,45 +694,6 @@ class WebScraper:
                         """)
                     except Exception:
                         page_links = []
-                    
-                    # Get all images directly from Playwright
-                    try:
-                        page_images = await page.evaluate("""
-                            () => {
-                                const images = [];
-                                const imgElements = document.querySelectorAll('img');
-                                const seen = new Set();
-                                
-                                imgElements.forEach(img => {
-                                    const src = img.src || img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('data-original');
-                                    if (!src || src.startsWith('data:') || seen.has(src)) return;
-                                    seen.add(src);
-                                    
-                                    const width = img.naturalWidth || img.width || 0;
-                                    const height = img.naturalHeight || img.height || 0;
-                                    
-                                    // Skip very small images
-                                    if (width > 0 && height > 0 && (width < 30 || height < 30)) {
-                                        return;
-                                    }
-                                    
-                                    // Skip icons/logos
-                                    const srcLower = src.toLowerCase();
-                                    if ((srcLower.includes('/icon') || srcLower.includes('/logo')) && (width < 100 || height < 100)) {
-                                        return;
-                                    }
-                                    
-                                    images.push({
-                                        url: src,
-                                        alt: (img.alt || img.getAttribute('title') || '').substring(0, 200)
-                                    });
-                                });
-                                
-                                return images;
-                            }
-                        """)
-                    except Exception:
-                        page_images = []
                     
                     scraped_at = await page.evaluate("() => new Date().toISOString()")
                     
@@ -690,7 +706,6 @@ class WebScraper:
                 # Use page_title from Playwright if available
                 final_title = page_title if page_title and page_title != "Untitled" else None
                 final_links = page_links if page_links else []
-                final_images = page_images if page_images else []
                 final_content = body_text if body_text else ""
                 
                 # Parse HTML with BeautifulSoup as fallback/enhancement
@@ -709,9 +724,10 @@ class WebScraper:
                     if soup:
                         final_links = self._extract_article_links(soup, url)
                 
-                if not final_images or len(final_images) == 0:
-                    if soup:
-                        final_images = self._extract_images(soup, url)
+                # Ensure all links have image_url field (add empty string if missing)
+                for link in final_links:
+                    if 'image_url' not in link:
+                        link['image_url'] = ''
                 
                 if not final_content or len(final_content) < 100:
                     if soup:
@@ -733,7 +749,6 @@ class WebScraper:
                     "url": url,
                     "title": final_title,
                     "article_links": final_links[:100],  # Limit to 100
-                    "images": final_images[:50],  # Limit to 50
                     "content": final_content[:15000],  # Limit content length
                     "scraped_at": scraped_at
                 }
@@ -797,7 +812,6 @@ async def main():
         print("="*50)
         print(f"Title: {result.get('title', 'N/A')}")
         print(f"Article Links Found: {len(result.get('article_links', []))}")
-        print(f"Images Found: {len(result.get('images', []))}")
         print(f"Content Length: {len(result.get('content', ''))} characters")
         print(f"\n✅ Results saved to: {filepath}")
         print(f"✅ Results cached in Redis (24 hours)")
