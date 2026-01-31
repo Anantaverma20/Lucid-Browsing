@@ -31,8 +31,7 @@ class ScrapeRequest(BaseModel):
 class ScrapeResponse(BaseModel):
     url: str
     title: str
-    article_links: list
-    images: list
+    article_links: list  # Each link contains: url, title, image_url
     content: str
     scraped_at: Optional[str] = None
 
@@ -49,7 +48,6 @@ def validate_and_format_result(result: dict, url: str) -> dict:
         "url": result.get("url", url),
         "title": result.get("title", "Untitled"),
         "article_links": result.get("article_links", []) if isinstance(result.get("article_links"), list) else [],
-        "images": result.get("images", []) if isinstance(result.get("images"), list) else [],
         "content": result.get("content", "") if isinstance(result.get("content"), str) else "",
         "scraped_at": result.get("scraped_at")
     }
@@ -87,8 +85,7 @@ async def scrape_url(request: ScrapeRequest):
     
     Returns JSON with:
     - title: Page title
-    - article_links: List of article links found on the page
-    - images: List of images found on the page
+    - article_links: List of article links (each with url, title, image_url)
     - content: Main content text (ads removed)
     """
     try:
