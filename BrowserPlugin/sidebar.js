@@ -1,27 +1,76 @@
 (() => {
+  // Wait for sidebar to be initialized
   const sidebar = window.__interestLensSidebar;
   if (!sidebar) {
+    console.log("InterestLens: Waiting for sidebar...");
     return;
   }
 
+  // Prevent duplicate initialization
+  if (sidebar._initialized) {
+    return;
+  }
+  sidebar._initialized = true;
+
   const MAX_CARDS = 12;
+  const ICONS = sidebar.ICONS || {};
+
+  // Voice state
+  let voiceState = 'idle';
+  let recognition = null;
 
   const clearBody = () => {
-    sidebar.body.textContent = "";
+    if (sidebar.body) {
+      sidebar.body.innerHTML = "";
+    }
   };
 
-  const renderMessage = (message, { loading = false } = {}) => {
+  const renderLoading = (message = "Loading...") => {
     clearBody();
-    const el = document.createElement("div");
-    el.className = "il-loading";
-    el.textContent = message;
-    sidebar.body.appendChild(el);
+    if (!sidebar.body) return;
+    sidebar.body.innerHTML = `
+      <div class="il-loading">
+        <div class="il-spinner"></div>
+        <div class="il-loading-text">${message}</div>
+      </div>
+    `;
+  };
 
-    if (loading) {
-      const spinner = document.createElement("div");
-      spinner.className = "il-spinner";
-      sidebar.body.appendChild(spinner);
-    }
+  const renderEmpty = (title, desc) => {
+    clearBody();
+    if (!sidebar.body) return;
+    sidebar.body.innerHTML = `
+      <div class="il-empty">
+        <div class="il-empty-icon">${ICONS.empty || ''}</div>
+        <div class="il-empty-title">${title || 'No content found'}</div>
+        <div class="il-empty-desc">${desc || 'Try a different page.'}</div>
+      </div>
+    `;
+  };
+
+  const renderError = (message) => {
+    clearBody();
+    if (!sidebar.body) return;
+    sidebar.body.innerHTML = `
+      <div class="il-error">
+        <div class="il-error-icon">${ICONS.alert || ''}</div>
+        <div class="il-error-text">${message || 'Something went wrong'}</div>
+      </div>
+    `;
+  };
+
+  const getScoreClass = (score) => {
+    if (score == null) return 'il-badge-loading';
+    if (score >= 80) return 'il-badge-good';
+    if (score >= 50) return 'il-badge-warning';
+    return 'il-badge-danger';
+  };
+
+  const getScoreIcon = (score) => {
+    if (score == null) return '';
+    if (score >= 80) return ICONS.check || '';
+    if (score >= 50) return ICONS.warning || '';
+    return ICONS.alert || '';
   };
 
   const buildCard = (data) => {
@@ -31,109 +80,123 @@
     card.target = "_blank";
     card.rel = "noopener";
 
-    const content = document.createElement("div");
-    content.className = "il-card-content";
+    const hasImage = data.imageUrl && data.imageUrl.length > 0;
+    
+    let domain = data.url;
+    try {
+      domain = new URL(data.url).hostname.replace('www.', '');
+    } catch (e) {}
 
-    const title = document.createElement("div");
-    title.className = "il-card-title";
-    title.textContent = data.title || data.url;
+    card.innerHTML = `
+      <div class="il-card-image">
+        ${hasImage ? `<img src="${data.imageUrl}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='<div class=il-card-placeholder>No image</div>'">` : '<div class="il-card-placeholder">No image</div>'}
+      </div>
+      <div class="il-card-content">
+        <div class="il-card-title">${data.title || 'Untitled'}</div>
+        <div class="il-card-desc">${domain}</div>
+        <div class="il-badge il-badge-loading"><span>Checking...</span></div>
+      </div>
+    `;
 
-    const desc = document.createElement("div");
-    desc.className = "il-card-desc";
-    desc.textContent = data.description || data.url || "";
-
-    const badge = document.createElement("div");
-    badge.className = "il-badge";
-    badge.textContent = "Authenticity: …";
-
-    content.appendChild(title);
-    content.appendChild(desc);
-    content.appendChild(badge);
-
-    card.appendChild(content);
-
-    return { card, title, desc, badge };
+    return card;
   };
 
-  const renderCards = (cards) => {
-    clearBody();
-    cards.forEach((card) => sidebar.body.appendChild(card));
+  const updateCardBadge = (card, score) => {
+    const badge = card.querySelector('.il-badge');
+    if (!badge) return;
+    
+    const scoreClass = getScoreClass(score);
+    const icon = getScoreIcon(score);
+    badge.className = `il-badge ${scoreClass}`;
+    
+    if (score == null) {
+      badge.innerHTML = `<span>N/A</span>`;
+    } else {
+      badge.innerHTML = `<span class="il-badge-icon">${icon}</span><span>${score}% authentic</span>`;
+    }
   };
 
-  const requestScrape = (url, { refreshCache = false } = {}) =>
-    new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(
-        { type: "interestlens:scrape", url, refreshCache },
-        (response) => {
-          if (!response) {
-            reject(new Error("No response from background"));
-            return;
+  const requestScrape = (url, refreshCache = false) => {
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.runtime.sendMessage(
+          { type: "interestlens:scrape", url, refreshCache },
+          (response) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+              return;
+            }
+            if (!response || !response.ok) {
+              reject(new Error(response?.error || "Scrape failed"));
+              return;
+            }
+            resolve(response.data);
           }
-          if (!response.ok) {
-            reject(new Error(response.error || "Scrape failed"));
-            return;
-          }
-          resolve(response.data);
-        }
-      );
+        );
+      } catch (e) {
+        reject(e);
+      }
     });
+  };
 
-  const requestAuthenticity = (payload) =>
-    new Promise((resolve, reject) => {
-      chrome.runtime.sendMessage(
-        { type: "interestlens:authenticity", payload },
-        (response) => {
-          if (!response) {
-            reject(new Error("No response from background"));
-            return;
+  const requestAuthenticity = (payload) => {
+    return new Promise((resolve, reject) => {
+      try {
+        chrome.runtime.sendMessage(
+          { type: "interestlens:authenticity", payload },
+          (response) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+              return;
+            }
+            if (!response || !response.ok) {
+              reject(new Error(response?.error || "Authenticity failed"));
+              return;
+            }
+            resolve(response.data);
           }
-          if (!response.ok) {
-            reject(new Error(response.error || "Authenticity failed"));
-            return;
-          }
-          resolve(response.data);
-        }
-      );
+        );
+      } catch (e) {
+        reject(e);
+      }
     });
+  };
 
-  const loadCards = async ({ refreshCache = false } = {}) => {
-    renderMessage("Loading topics…", { loading: true });
+  const loadCards = async (refreshCache = false) => {
+    renderLoading("Scanning page for content...");
+    if (sidebar.updateStats) sidebar.updateStats(null, 0, 0);
 
     try {
-      const data = await requestScrape(window.location.href, { refreshCache });
-      const links = Array.isArray(data?.article_links)
-        ? data.article_links
-        : [];
+      const data = await requestScrape(window.location.href, refreshCache);
+      const links = Array.isArray(data?.article_links) ? data.article_links : [];
 
       if (!links.length) {
-        renderMessage("No links returned from scraper.");
+        renderEmpty("No articles found", "This page doesn't have article links to analyze.");
         return;
       }
 
       const items = links.slice(0, MAX_CARDS).map((item) => ({
-        item_id: crypto.randomUUID(),
+        id: crypto.randomUUID(),
         url: item.url,
         title: item.title || item.url,
-        image_url: item.image_url || ""
+        imageUrl: item.image_url || ""
       }));
 
-      const cardsWithParts = items.map((item) => ({
-        item,
-        parts: buildCard({
-          url: item.url,
-          title: item.title,
-          description: item.url,
-          imageUrl: item.image_url
-        })
-      }));
+      // Render cards
+      clearBody();
+      const cards = items.map(item => {
+        const card = buildCard(item);
+        card.dataset.itemId = item.id;
+        if (sidebar.body) sidebar.body.appendChild(card);
+        return { item, card };
+      });
 
-      const cards = cardsWithParts.map(({ parts }) => parts.card);
+      if (sidebar.updateStats) sidebar.updateStats(null, items.length, 0);
 
-      renderCards(cards);
-
+      // Request authenticity
       const payload = {
-        items: items.map((item) => ({
-          item_id: item.item_id,
+        items: items.map(item => ({
+          item_id: item.id,
           url: item.url,
           text: item.title,
           check_depth: "standard"
@@ -141,31 +204,134 @@
         max_concurrent: 20
       };
 
-      const authenticity = await requestAuthenticity(payload);
-      const results = Array.isArray(authenticity?.results)
-        ? authenticity.results
-        : [];
-      const scoresById = new Map(
-        results.map((result) => [result.item_id, result.authenticity_score])
-      );
+      try {
+        const auth = await requestAuthenticity(payload);
+        const results = Array.isArray(auth?.results) ? auth.results : [];
+        const scores = new Map(results.map(r => [r.item_id, r.authenticity_score]));
 
-      cardsWithParts.forEach(({ item, parts }) => {
-        const score = scoresById.get(item.item_id);
-        if (typeof score === "number") {
-          parts.badge.textContent = `Authenticity: ${score}`;
-          parts.badge.dataset.score = `${score}`;
-        } else {
-          parts.badge.textContent = "Authenticity: N/A";
-        }
-      });
-    } catch (error) {
-      renderMessage("Failed to load from scraper.");
+        let total = 0, count = 0, verified = 0;
+
+        cards.forEach(({ item, card }) => {
+          const score = scores.get(item.id);
+          updateCardBadge(card, score);
+          
+          if (typeof score === "number") {
+            total += score;
+            count++;
+            if (score >= 80) verified++;
+          }
+        });
+
+        const avg = count > 0 ? total / count : null;
+        if (sidebar.updateStats) sidebar.updateStats(avg, items.length, verified);
+      } catch (e) {
+        console.warn("Authenticity failed:", e);
+        cards.forEach(({ card }) => updateCardBadge(card, null));
+      }
+    } catch (e) {
+      console.error("Load failed:", e);
+      renderError("Failed to load content. Check if the backend is running.");
     }
   };
 
-  sidebar.refresh.addEventListener("click", () => {
-    loadCards({ refreshCache: true });
-  });
+  // Voice handlers
+  const setVoiceState = (state) => {
+    voiceState = state;
+    const btn = sidebar.voiceBtn;
+    if (!btn) return;
 
+    btn.classList.remove('il-voice-listening', 'il-voice-processing');
+    const mic = ICONS.mic || '';
+
+    if (state === 'listening') {
+      btn.classList.add('il-voice-listening');
+      btn.innerHTML = `<span class="il-voice-icon">${mic}</span><span>Listening...</span>`;
+      if (sidebar.updateVoiceStatus) sidebar.updateVoiceStatus("Speak now...");
+    } else if (state === 'processing') {
+      btn.classList.add('il-voice-processing');
+      btn.innerHTML = `<span class="il-voice-icon">${mic}</span><span>Processing...</span>`;
+    } else {
+      btn.innerHTML = `<span class="il-voice-icon">${mic}</span><span>Ask InterestLens</span>`;
+    }
+  };
+
+  const handleVoiceCommand = (cmd) => {
+    const c = cmd.toLowerCase();
+    if (sidebar.updateVoiceStatus) {
+      sidebar.updateVoiceStatus(`Heard: "${cmd}"`);
+    }
+  };
+
+  const startVoice = () => {
+    if (voiceState !== 'idle') {
+      if (recognition) {
+        try { recognition.stop(); } catch (e) {}
+      }
+      setVoiceState('idle');
+      return;
+    }
+
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+      if (sidebar.updateVoiceStatus) sidebar.updateVoiceStatus("Voice not supported in this browser");
+      return;
+    }
+
+    setVoiceState('listening');
+
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    recognition = new SR();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+
+    recognition.onresult = (e) => {
+      const cmd = e.results[0][0].transcript;
+      setVoiceState('processing');
+      setTimeout(() => {
+        handleVoiceCommand(cmd);
+        setVoiceState('idle');
+      }, 500);
+    };
+
+    recognition.onerror = (e) => {
+      if (sidebar.updateVoiceStatus) sidebar.updateVoiceStatus(`Error: ${e.error}`);
+      setVoiceState('idle');
+    };
+
+    recognition.onend = () => {
+      if (voiceState === 'listening') setVoiceState('idle');
+    };
+
+    try {
+      recognition.start();
+    } catch (e) {
+      if (sidebar.updateVoiceStatus) sidebar.updateVoiceStatus("Could not start voice");
+      setVoiceState('idle');
+    }
+  };
+
+  // Attach event listeners safely
+  if (sidebar.refreshBtn) {
+    sidebar.refreshBtn.onclick = () => loadCards(true);
+  }
+
+  if (sidebar.voiceBtn) {
+    sidebar.voiceBtn.onclick = startVoice;
+  }
+
+  // Listen for messages
+  try {
+    chrome.runtime.onMessage.addListener((msg, sender, respond) => {
+      if (msg?.type === "interestlens:toggle-sidebar") {
+        if (sidebar.toggle) sidebar.toggle();
+        respond({ ok: true });
+        return true;
+      }
+    });
+  } catch (e) {
+    console.warn("Could not add message listener:", e);
+  }
+
+  // Initial load
   loadCards();
 })();

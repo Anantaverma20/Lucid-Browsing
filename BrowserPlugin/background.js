@@ -1,60 +1,45 @@
-const CONTENT_FILES = ["content.js", "sidebar.js"];
-const STYLE_FILES = ["sidebar.css"];
+// API endpoints
+const SCRAPER_API = "http://localhost:8000";
+const SCORING_API = "http://localhost:8001";
 
-const isInjectableUrl = (url) => {
-  if (!url) {
-    return false;
-  }
-  return url.startsWith("http://") || url.startsWith("https://");
-};
+// NOTE: Content scripts are automatically injected by manifest.json content_scripts
+// We don't need to manually inject them on tab updates - that causes duplicates!
 
-const injectSidebar = async (tabId) => {
+// Send DOM action to content script
+const sendDomAction = async (tabId, action, params = {}) => {
   try {
-    await chrome.scripting.insertCSS({
-      target: { tabId },
-      files: STYLE_FILES
+    const response = await chrome.tabs.sendMessage(tabId, {
+      type: "interestlens:dom-action",
+      action,
+      params
     });
+    return response;
   } catch (error) {
-    // Ignore insertCSS errors (e.g., already injected).
-  }
-
-  try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: CONTENT_FILES,
-      world: "ISOLATED"
-    });
-  } catch (error) {
-    // Ignore executeScript errors (e.g., non-injectable pages).
+    console.error("Failed to send DOM action:", error);
+    return { ok: false, error: error.message };
   }
 };
 
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (changeInfo.status !== "complete") {
-    return;
+// Toggle sidebar visibility
+const toggleSidebar = async (tabId) => {
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      type: "interestlens:toggle-sidebar"
+    });
+  } catch (error) {
+    console.error("Failed to toggle sidebar:", error);
   }
-  if (!isInjectableUrl(tab.url)) {
-    return;
-  }
-  injectSidebar(tabId);
-});
-
-chrome.runtime.onInstalled.addListener(async () => {
-  const tabs = await chrome.tabs.query({});
-  await Promise.all(
-    tabs
-      .filter((tab) => isInjectableUrl(tab.url))
-      .map((tab) => injectSidebar(tab.id))
-  );
-});
+};
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Scrape request
   if (message?.type === "interestlens:scrape") {
     const payload = { url: message.url };
     if (message.refreshCache) {
       payload.refresh_cache = true;
     }
-    fetch("http://localhost:8000/scrape", {
+    
+    fetch(`${SCRAPER_API}/scrape`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
@@ -73,8 +58,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // Authenticity check request
   if (message?.type === "interestlens:authenticity") {
-    fetch("http://localhost:8001/check_authenticity/batch", {
+    fetch(`${SCORING_API}/check_authenticity/batch`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(message.payload)
@@ -93,5 +79,61 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // Voice session request (Daily + Pipecat)
+  if (message?.type === "interestlens:voice-session") {
+    fetch(`${SCORING_API}/voice/start-session`, {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json"
+      }
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          if (response.status === 401 || response.status === 403) {
+            throw new Error("Authentication required. Using browser voice recognition instead.");
+          }
+          throw new Error(`Status ${response.status}`);
+        }
+        const data = await response.json();
+        sendResponse({ ok: true, data });
+      })
+      .catch((error) => {
+        sendResponse({ 
+          ok: false, 
+          error: error?.message || "Voice session unavailable",
+          fallback: "web-speech-api"
+        });
+      });
+
+    return true;
+  }
+
+  // DOM action request (from voice commands or other sources)
+  if (message?.type === "interestlens:execute-dom-action") {
+    const { action, params } = message;
+    
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+      if (tabs.length > 0) {
+        const result = await sendDomAction(tabs[0].id, action, params);
+        sendResponse(result);
+      } else {
+        sendResponse({ ok: false, error: "No active tab" });
+      }
+    });
+
+    return true;
+  }
+
   return false;
+});
+
+// Handle keyboard shortcuts
+chrome.commands?.onCommand?.addListener((command) => {
+  if (command === "toggle-sidebar") {
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+      if (tabs.length > 0) {
+        await toggleSidebar(tabs[0].id);
+      }
+    });
+  }
 });
