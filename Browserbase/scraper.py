@@ -854,13 +854,21 @@ Selectors:"""
         
         return content_text[:15000]  # Increased limit to 15000 characters
     
-    async def scrape(self, url: str) -> Dict:
+    async def scrape(self, url: str, refresh_cache: bool = False) -> Dict:
         """Scrape a URL and return structured data."""
-        # Check cache first
-        cached_data = self._check_cache(url)
-        if cached_data:
-            print(f"Returning cached data for {url}")
-            return cached_data
+        # Check cache first unless refresh is requested
+        if refresh_cache and self.redis_client:
+            try:
+                cache_key = self._get_cache_key(url)
+                self.redis_client.delete(cache_key)
+                print(f"Cache refreshed for {url}")
+            except Exception as e:
+                print(f"Cache refresh error: {e}")
+        else:
+            cached_data = self._check_cache(url)
+            if cached_data:
+                print(f"Returning cached data for {url}")
+                return cached_data
         
         print(f"Scraping {url}...")
         
