@@ -221,75 +221,57 @@ async def search_news_sources(
 ) -> List[CrossReferenceResult]:
     """
     Search for the same news story across multiple sources.
-    Uses DuckDuckGo News search as a simple fallback (no browser needed).
+    Uses Google News RSS search (no browser needed).
     """
     import time
     start_time = time.time()
     results = []
     search_source = "none"
+    # Separate timeout for search calls to avoid short connect timeouts
+    search_timeout = httpx.Timeout(20.0, connect=10.0)
+    max_retries = 2
 
     try:
         print(f"[NEWS_SEARCH] Searching for: {topic}")
 
-        # Use DuckDuckGo News API (no auth required)
+        # Use Google News RSS (no auth required)
         search_query = topic.replace(" ", "+")
-        search_url = f"https://duckduckgo.com/news.js?q={search_query}&o=json"
+        search_url = f"https://news.google.com/rss/search?q={search_query}"
 
-        async with httpx.AsyncClient(timeout=EXTRACTION_TIMEOUT) as client:
-            # DuckDuckGo requires a browser-like user agent
+        async with httpx.AsyncClient(timeout=search_timeout) as client:
+            # Google News RSS requires a browser-like user agent
             headers = {
                 "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36",
-                "Accept": "application/json"
+                "Accept": "application/rss+xml, application/xml;q=0.9, */*;q=0.8"
             }
-
-            response = await client.get(search_url, headers=headers)
-            print(f"[NEWS_SEARCH] DuckDuckGo response: {response.status_code}")
-
-            if response.status_code == 200:
+            response = None
+            for attempt in range(1, max_retries + 1):
                 try:
-                    data = response.json()
-                    articles = data.get("results", [])
-                    print(f"[NEWS_SEARCH] Found {len(articles)} articles")
-                    search_source = "duckduckgo"
+                    response = await client.get(search_url, headers=headers)
+                    print(f"[NEWS_SEARCH] Google News response: {response.status_code}")
+                    break
+                except httpx.ConnectTimeout:
+                    print(f"[NEWS_SEARCH] Google News connect timeout (attempt {attempt}/{max_retries})")
+                    if attempt == max_retries:
+                        response = None
+                except httpx.HTTPError as e:
+                    print(f"[NEWS_SEARCH] Google News request error: {e}")
+                    response = None
+                    break
 
-                    for article in articles[:max_results]:
-                        source_name = article.get("source", "Unknown")
-
-                        # Skip if from excluded domain
-                        if exclude_domain.lower() in source_name.lower():
-                            continue
-
-                        results.append(CrossReferenceResult(
-                            source_url=article.get("url", ""),
-                            source_name=source_name,
-                            title=article.get("title", ""),
-                            excerpt=article.get("excerpt", article.get("title", "")),
-                            publication_date=article.get("date"),
-                            relevance_score=0.8
-                        ))
-                except Exception as e:
-                    print(f"[NEWS_SEARCH] Error parsing response: {e}")
-
-        # If DuckDuckGo didn't work, try a simple Bing News search
-        if not results:
-            print(f"[NEWS_SEARCH] Trying Bing News fallback...")
-            bing_url = f"https://www.bing.com/news/search?q={search_query}&format=rss"
-
-            async with httpx.AsyncClient(timeout=EXTRACTION_TIMEOUT) as client:
-                response = await client.get(bing_url, headers=headers)
-                print(f"[NEWS_SEARCH] Bing response: {response.status_code}")
-
-                if response.status_code == 200:
+            if response and response.status_code == 200:
+                try:
                     # Parse RSS feed
                     import re
                     items = re.findall(r'<item>(.*?)</item>', response.text, re.DOTALL)
-                    print(f"[NEWS_SEARCH] Found {len(items)} Bing items")
-                    search_source = "bing"
+                    print(f"[NEWS_SEARCH] Found {len(items)} Google items")
+                    search_source = "google"
 
                     for item in items[:max_results]:
                         title_match = re.search(r'<title>(.*?)</title>', item)
                         link_match = re.search(r'<link>(.*?)</link>', item)
                         desc_match = re.search(r'<description>(.*?)</description>', item)
+                        pub_match = re.search(r'<pubDate>(.*?)</pubDate>', item)
 
                         if title_match and link_match:
                             title = title_match.group(1)
@@ -307,8 +289,11 @@ async def search_news_sources(
                                 source_name=source_domain,
                                 title=title,
                                 excerpt=desc[:200] if desc else title,
-                                relevance_score=0.7
+                                publication_date=pub_match.group(1) if pub_match else None,
+                                relevance_score=0.8
                             ))
+                except Exception as e:
+                    print(f"[NEWS_SEARCH] Error parsing Google News response: {e}")
 
     except Exception as e:
         print(f"[NEWS_SEARCH ERROR] Error searching news sources: {e}")

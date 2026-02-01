@@ -27,7 +27,9 @@ from services.browserbase import (
 )
 from services.redis_client import (
     cache_authenticity_result,
-    get_cached_authenticity
+    get_cached_authenticity,
+    cache_authenticity_score,
+    get_cached_authenticity_score
 )
 from services.weave_utils import (
     trace_authenticity_check,
@@ -273,7 +275,25 @@ async def authenticity_agent(
     """
     start_time = time.time()
 
-    # Check cache first
+    # Check cache first (by URL)
+    cached_score = await get_cached_authenticity_score(url)
+    if cached_score is not None:
+        return AuthenticityResult(
+            item_id=item_id,
+            authenticity_score=cached_score,
+            confidence=0.2,
+            verification_status="unverified",
+            sources_checked=0,
+            corroborating_count=0,
+            conflicting_count=0,
+            key_claims=[],
+            claim_verifications=[],
+            explanation="Loaded cached authenticity score for this URL.",
+            checked_at=datetime.utcnow(),
+            processing_time_ms=0
+        )
+
+    # Check cache by item_id
     cached = await get_cached_authenticity(item_id)
     if cached:
         return AuthenticityResult(**cached)
@@ -324,7 +344,8 @@ async def authenticity_agent(
                 checked_at=datetime.utcnow(),
                 processing_time_ms=int((time.time() - start_time) * 1000)
             )
-            await cache_authenticity_result(item_id, result.model_dump())
+            await cache_authenticity_result(item_id, result.model_dump(mode="json"))
+            await cache_authenticity_score(url, result.authenticity_score)
             return result
 
         # Step 3: Search for cross-references
@@ -374,7 +395,8 @@ async def authenticity_agent(
         )
 
         # Cache result
-        await cache_authenticity_result(item_id, result.model_dump())
+        await cache_authenticity_result(item_id, result.model_dump(mode="json"))
+        await cache_authenticity_score(url, result.authenticity_score)
 
         # Log trace for observability
         trace_authenticity_check(

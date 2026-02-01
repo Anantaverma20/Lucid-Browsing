@@ -160,6 +160,33 @@ async def get_cached_authenticity(item_id: str) -> Optional[dict]:
         return None
 
 
+async def cache_authenticity_score(url: str, score: int, ttl: int = 3600):
+    """Cache authenticity score by URL"""
+    r = await get_redis()
+    if not r:
+        return
+    if not url:
+        return
+    key = f"authenticity:score:{url}"
+    await r.set(key, int(score))
+    await r.expire(key, ttl)
+
+
+async def get_cached_authenticity_score(url: str) -> Optional[int]:
+    """Get cached authenticity score by URL"""
+    r = await get_redis()
+    if not r:
+        return None
+    if not url:
+        return None
+    key = f"authenticity:score:{url}"
+    try:
+        value = await r.get(key)
+        return int(value) if value is not None else None
+    except:
+        return None
+
+
 async def mark_authenticity_pending(item_id: str):
     """Mark an item as having a pending authenticity check"""
     r = await get_redis()
