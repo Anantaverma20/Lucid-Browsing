@@ -11,7 +11,7 @@ import sys
 import asyncio
 import traceback
 from typing import Dict, List, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -19,6 +19,7 @@ from playwright.async_api import async_playwright
 from browserbase import Browserbase
 import redis
 from bs4 import BeautifulSoup
+from openai import AsyncOpenAI
 
 # Load environment variables
 load_dotenv()
@@ -30,6 +31,15 @@ class WebScraper:
         
         # Initialize Browserbase
         self.bb = Browserbase(api_key=self.browserbase_api_key)
+        
+        # Initialize OpenAI client (for LLM-based ad selector generation)
+        self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        self.openai_client = None
+        if self.openai_api_key:
+            self.openai_client = AsyncOpenAI(api_key=self.openai_api_key)
+            print("OpenAI client initialized for LLM-based ad removal")
+        else:
+            print("Warning: OPENAI_API_KEY not found - LLM-based ad removal disabled")
         
         # Initialize Redis
         # Try Redis URL first (for Redis Cloud), then fall back to individual params
@@ -142,12 +152,113 @@ class WebScraper:
         
         return False
     
-    def _remove_ads(self, soup: BeautifulSoup) -> BeautifulSoup:
-        """Remove ad elements from the HTML."""
+    def _should_block_request(self, request_url: str, resource_type: str) -> bool:
+        """Check if a network request should be blocked (ads, trackers, etc.)."""
+        if not request_url:
+            return False
+        
+        request_url_lower = request_url.lower()
+        
+        # Block ad-related domains and paths
+        ad_domains = [
+            'doubleclick.net', 'googleadservices.com', 'googlesyndication.com',
+            'google-analytics.com', 'googletagmanager.com', 'facebook.com/tr',
+            'adsafeprotected.com', 'adnxs.com', 'adsrvr.org', 'adtechus.com',
+            'amazon-adsystem.com', 'advertising.com', 'adform.net', 'adzerk.net',
+            'outbrain.com', 'taboola.com', 'criteo.com', 'media.net',
+            'adsystem', 'adserver', 'advertising', 'advertisement',
+            'adservice', 'adtech', 'advertising', 'advert', 'ads.'
+        ]
+        
+        # Block tracking/analytics
+        tracking_domains = [
+            'analytics', 'tracking', 'tracker', 'pixel', 'beacon',
+            'facebook.net', 'facebook.com/tr', 'scorecardresearch.com',
+            'quantserve.com', '2mdn.net', 'moatads.com'
+        ]
+        
+        # Block social media widgets/embeds
+        social_domains = [
+            'facebook.com/plugins', 'twitter.com/widgets', 'instagram.com/embed',
+            'linkedin.com/embed', 'pinterest.com/pin'
+        ]
+        
+        # Block fonts and images from ad domains (optional - can be commented out if needed)
+        # if resource_type in ['font', 'image']:
+        #     for domain in ad_domains:
+        #         if domain in request_url_lower:
+        #             return True
+        
+        # Block scripts, stylesheets, and iframes from ad/tracking domains
+        if resource_type in ['script', 'stylesheet', 'iframe', 'fetch', 'xhr']:
+            for domain in ad_domains + tracking_domains + social_domains:
+                if domain in request_url_lower:
+                    return True
+        
+        # Block common ad URL patterns
+        ad_patterns = [
+            '/ads/', '/ad/', '/advertisement/', '/advert/', '/sponsor/',
+            '/tracking/', '/track/', '/pixel', '/beacon', '/analytics',
+            '?ad=', '&ad=', '/ads.', '/ad.', 'banner', 'popup'
+        ]
+        
+        for pattern in ad_patterns:
+            if pattern in request_url_lower:
+                return True
+        
+        return False
+    
+    def _filter_ad_links(self, links: List[Dict]) -> List[Dict]:
+        """Filter out ad-related links that slipped through network blocking."""
+        if not links:
+            return links
+        
+        # Patterns that indicate ad/sponsored content in URLs
+        ad_url_patterns = [
+            '/ad/', '/ads/', '/advertisement/', '/advert/', '/sponsor/',
+            '/promo/', '/promotion/', '/affiliate/', '/click/', '/track/',
+            '/redirect/', '/out/', '/go/', '/partner/', '/ref=',
+            'doubleclick', 'googlesyndication', 'googleadservices',
+            'facebook.com/tr', 'amazon-adsystem', 'taboola', 'outbrain',
+            'criteo', 'adnxs', 'advertising', 'banner', 'popup',
+            'sponsored', 'promoted', 'paid-post'
+        ]
+        
+        # Patterns in link titles that indicate ads
+        ad_title_patterns = [
+            'advertisement', 'sponsored', 'promoted', 'paid post',
+            'partner content', 'ad:', '[ad]', '(ad)', 'promo',
+            'affiliate', 'shop now', 'buy now', 'special offer',
+            'limited time', 'click here'
+        ]
+        
+        filtered_links = []
+        for link in links:
+            url_lower = link.get('url', '').lower()
+            title_lower = link.get('title', '').lower()
+            
+            # Check if URL contains ad patterns
+            is_ad_url = any(pattern in url_lower for pattern in ad_url_patterns)
+            
+            # Check if title contains ad patterns
+            is_ad_title = any(pattern in title_lower for pattern in ad_title_patterns)
+            
+            # Keep link only if it's not an ad
+            if not is_ad_url and not is_ad_title:
+                filtered_links.append(link)
+        
+        return filtered_links
+    
+    async def _remove_ads(self, soup: BeautifulSoup, url: str = "") -> BeautifulSoup:
+        """Remove ad elements from the HTML using rule-based and LLM-generated selectors."""
         if not soup:
             return soup
         
-        # Find and remove common ad containers
+        # Step 1: Apply LLM-generated selectors (if OpenAI is configured)
+        if self.openai_client and url:
+            soup = await self._remove_ads_with_llm_selectors(soup, url)
+        
+        # Step 2: Apply rule-based selectors (fallback and baseline)
         ad_selectors = [
             '[class*="ad"]',
             '[id*="ad"]',
@@ -192,6 +303,256 @@ class WebScraper:
             pass
         
         return soup
+    
+    def _extract_html_structure_sample(self, soup: BeautifulSoup, max_length: int = 3000) -> str:
+        """Extract a sample of HTML structure (classes, IDs, tags) for LLM analysis."""
+        if not soup:
+            return ""
+        
+        structure_parts = []
+        
+        # Extract unique class names and IDs
+        classes = set()
+        ids = set()
+        tags = set()
+        
+        try:
+            # Get all elements with classes or IDs
+            for element in soup.find_all(True):  # All elements
+                if element is None:
+                    continue
+                
+                # Get classes
+                element_classes = element.get('class', [])
+                if isinstance(element_classes, list):
+                    classes.update(element_classes)
+                elif isinstance(element_classes, str):
+                    classes.add(element_classes)
+                
+                # Get IDs
+                element_id = element.get('id', '')
+                if element_id:
+                    ids.add(element_id)
+                
+                # Get tag names
+                if hasattr(element, 'name') and element.name:
+                    tags.add(element.name)
+                
+                # Limit to avoid too much data
+                if len(classes) > 100 or len(ids) > 100:
+                    break
+        except Exception:
+            pass
+        
+        # Build structure summary
+        structure_parts.append(f"Tags found: {', '.join(sorted(list(tags))[:50])}")
+        structure_parts.append(f"\nClasses found: {', '.join(sorted(list(classes))[:100])}")
+        structure_parts.append(f"\nIDs found: {', '.join(sorted(list(ids))[:50])}")
+        
+        structure = '\n'.join(structure_parts)
+        
+        # Limit total length
+        if len(structure) > max_length:
+            structure = structure[:max_length] + "..."
+        
+        return structure
+    
+    async def _llm_generate_ad_selectors(self, html_structure: str, domain: str) -> List[str]:
+        """Use OpenAI GPT-3.5-turbo to generate CSS selectors for ad removal."""
+        if not self.openai_client:
+            return []
+        
+        try:
+            prompt = f"""Analyze this HTML structure from {domain} and generate CSS selectors to identify and remove advertisement elements.
+
+HTML Structure:
+{html_structure}
+
+Generate CSS selectors (like '[class*="ad"]', '#ad-container', etc.) that would match:
+1. Advertisement containers
+2. Sponsored content
+3. Promotional banners
+4. Ad-related iframes
+5. Marketing widgets
+
+Return ONLY a JSON array of CSS selector strings, nothing else. Example format:
+["[class*='ad']", "[id*='advertisement']", ".sponsored", "#ad-container"]
+
+Selectors:"""
+
+            response = await self.openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",  # Cheapest and fast model
+                messages=[
+                    {"role": "system", "content": "You are a CSS selector expert. Return only valid CSS selectors as a JSON array."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,  # Lower temperature for more consistent results
+                max_tokens=500,  # Limit tokens to keep cost low
+            )
+            
+            # Extract selectors from response
+            content = response.choices[0].message.content.strip()
+            
+            # Try to parse JSON array
+            try:
+                # Remove markdown code blocks if present
+                if content.startswith("```"):
+                    content = content.split("```")[1]
+                    if content.startswith("json"):
+                        content = content[4:]
+                    content = content.strip()
+                
+                selectors = json.loads(content)
+                if isinstance(selectors, list):
+                    # Validate selectors are strings
+                    selectors = [s for s in selectors if isinstance(s, str) and len(s) > 0]
+                    print(f"Generated {len(selectors)} ad selectors using LLM for {domain}")
+                    return selectors
+            except json.JSONDecodeError:
+                # Try to extract selectors from text
+                import re
+                selector_pattern = r'["\']([^"\']+)["\']'
+                selectors = re.findall(selector_pattern, content)
+                if selectors:
+                    print(f"Extracted {len(selectors)} ad selectors from LLM response for {domain}")
+                    return selectors
+            
+            print(f"Warning: Could not parse LLM response for {domain}")
+            return []
+            
+        except Exception as e:
+            print(f"Error generating LLM selectors for {domain}: {e}")
+            return []
+    
+    def _get_domain_from_url(self, url: str) -> str:
+        """Extract domain from URL."""
+        try:
+            parsed = urlparse(url)
+            domain = parsed.netloc or parsed.path
+            # Remove www. prefix
+            if domain.startswith('www.'):
+                domain = domain[4:]
+            return domain
+        except Exception:
+            return "unknown"
+    
+    async def _get_ad_selectors_for_domain(self, domain: str, html_structure: str) -> List[str]:
+        """Get cached ad selectors for domain, or generate if not cached."""
+        if not self.redis_client:
+            # If no Redis, generate selectors directly (no caching)
+            return await self._llm_generate_ad_selectors(html_structure, domain)
+        
+        cache_key = f"ad_selectors:{domain}"
+        
+        try:
+            # Check cache first (instant, 0ms latency)
+            cached = self.redis_client.get(cache_key)
+            if cached:
+                selectors = json.loads(cached)
+                print(f"Using cached ad selectors for {domain} ({len(selectors)} selectors)")
+                return selectors
+        except Exception as e:
+            print(f"Cache read error for {domain}: {e}")
+        
+        # Generate if not cached
+        selectors = await self._llm_generate_ad_selectors(html_structure, domain)
+        
+        # Cache for 24 hours (86400 seconds)
+        if selectors and self.redis_client:
+            try:
+                self.redis_client.setex(
+                    cache_key,
+                    86400,
+                    json.dumps(selectors)
+                )
+                print(f"Cached ad selectors for {domain} (24 hours)")
+            except Exception as e:
+                print(f"Cache write error for {domain}: {e}")
+        
+        return selectors
+    
+    async def _remove_ads_with_llm_selectors(self, soup: BeautifulSoup, url: str) -> BeautifulSoup:
+        """Remove ads using LLM-generated selectors (Option 6) - optimized for speed."""
+        if not soup or not self.openai_client:
+            return soup
+        
+        try:
+            # Add timeout to prevent blocking the main scraping flow
+            # If LLM takes too long, skip it and continue
+            return await asyncio.wait_for(
+                self._remove_ads_with_llm_selectors_impl(soup, url),
+                timeout=15.0  # 15 second timeout for LLM operations (increased from 2s)
+            )
+        except asyncio.TimeoutError:
+            print("LLM ad removal timed out after 15s, skipping...")
+            return soup
+        except Exception as e:
+            print(f"Error in LLM ad removal: {e}")
+            return soup
+    
+    async def _remove_ads_with_llm_selectors_impl(self, soup: BeautifulSoup, url: str) -> BeautifulSoup:
+        """Implementation of LLM-based ad removal."""
+        if not soup or not self.openai_client:
+            return soup
+        
+        try:
+            # Extract domain
+            domain = self._get_domain_from_url(url)
+            
+            # Check cache first (instant, 0ms latency)
+            cache_key = f"ad_selectors:{domain}"
+            llm_selectors = None
+            
+            if self.redis_client:
+                try:
+                    cached = self.redis_client.get(cache_key)
+                    if cached:
+                        llm_selectors = json.loads(cached)
+                        print(f"Using cached LLM selectors for {domain} ({len(llm_selectors)} selectors)")
+                except Exception:
+                    pass
+            
+            # If not cached, generate in background (non-blocking for first request)
+            if not llm_selectors:
+                # Extract HTML structure sample (lightweight, ~500-2000 tokens)
+                html_structure = self._extract_html_structure_sample(soup, max_length=1500)  # Reduced from 2000
+                
+                if html_structure:
+                    # Try to get selectors, but don't block if it takes too long
+                    try:
+                        # Use asyncio.wait_for to timeout LLM call if it's slow
+                        llm_selectors = await asyncio.wait_for(
+                            self._get_ad_selectors_for_domain(domain, html_structure),
+                            timeout=12.0  # 12 seconds for LLM call (increased from 2s)
+                        )
+                    except asyncio.TimeoutError:
+                        print(f"LLM selector generation timed out for {domain}, using rule-based removal")
+                        llm_selectors = []
+                    except Exception as e:
+                        print(f"LLM selector generation error for {domain}: {e}")
+                        llm_selectors = []
+            
+            # Apply LLM-generated selectors (fast, synchronous operation)
+            if llm_selectors:
+                for selector in llm_selectors:
+                    try:
+                        elements = soup.select(selector)
+                        for element in elements:
+                            if element is not None:
+                                try:
+                                    element.decompose()
+                                except Exception:
+                                    pass
+                    except Exception:
+                        # Invalid selector, skip
+                        continue
+            
+            return soup
+            
+        except Exception as e:
+            print(f"Error in LLM-based ad removal: {e}")
+            # Fall back to regular ad removal
+            return soup
     
     def _extract_article_links(self, soup: BeautifulSoup, base_url: str) -> List[Dict[str, str]]:
         """Extract article links from the page with associated images."""
@@ -552,7 +913,8 @@ class WebScraper:
                 # Connect to the remote browser using async Playwright
                 async with async_playwright() as playwright:
                     chromium = playwright.chromium
-                    browser = await chromium.connect_over_cdp(connect_url)
+                    # Set shorter timeout for CDP connection
+                    browser = await chromium.connect_over_cdp(connect_url, timeout=30000)  # 30s instead of default 60s
                     
                     if not browser:
                         raise Exception("Failed to connect to browser via CDP")
@@ -568,175 +930,297 @@ class WebScraper:
                         context = await browser.new_context()
                         page = await context.new_page()
                     
+                    # Set default timeout for page actions to 15s (instead of 30s default)
+                    page.set_default_timeout(15000)
+                    page.set_default_navigation_timeout(30000)  # 30s for navigation
+                    
                     if not page:
                         raise Exception("Failed to get or create page")
                     
-                    # Navigate to the URL
-                    await page.goto(url, wait_until="domcontentloaded", timeout=60000)
+                    # Set up network-level ad blocking using page.route()
+                    # Optimized: Use block list instead of checking every request
+                    blocked_patterns = [
+                        "*://*doubleclick.net/*",
+                        "*://*googlesyndication.com/*",
+                        "*://*googleadservices.com/*",
+                        "*://*google-analytics.com/*",
+                        "*://*googletagmanager.com/*",
+                        "*://*facebook.com/tr*",
+                        "*://*facebook.net/*",
+                        "*://*adsafeprotected.com/*",
+                        "*://*adnxs.com/*",
+                        "*://*adsrvr.org/*",
+                        "*://*adtechus.com/*",
+                        "*://*amazon-adsystem.com/*",
+                        "*://*advertising.com/*",
+                        "*://*adform.net/*",
+                        "*://*outbrain.com/*",
+                        "*://*taboola.com/*",
+                        "*://*criteo.com/*",
+                    ]
                     
-                    # Wait for page to be fully loaded and JavaScript to execute
-                    await page.wait_for_load_state("networkidle", timeout=60000)
+                    async def route_handler(route):
+                        """Optimized route handler - faster blocking."""
+                        request = route.request
+                        request_url = request.url.lower()
+                        
+                        # Quick pattern matching (faster than function call)
+                        if any(pattern.replace('*://*', '').replace('/*', '') in request_url for pattern in blocked_patterns):
+                            await route.abort()
+                        elif self._should_block_request(request_url, request.resource_type):
+                            await route.abort()
+                        else:
+                            await route.continue_()
                     
-                    # Wait longer for dynamic content to load (React/SPA sites need more time)
-                    await page.wait_for_timeout(8000)
+                    # Enable route interception to block ads at network level
+                    await page.route("**/*", route_handler)
+                    print("Network-level ad blocking enabled (optimized)")
                     
-                    # Scroll to trigger lazy loading of images and content
-                    await page.evaluate("""
-                        async () => {
-                            await new Promise((resolve) => {
-                                let totalHeight = 0;
-                                const distance = 100;
-                                const timer = setInterval(() => {
-                                    const scrollHeight = document.body.scrollHeight;
-                                    window.scrollBy(0, distance);
-                                    totalHeight += distance;
-                                    
-                                    if(totalHeight >= scrollHeight || totalHeight > 10000){
-                                        clearInterval(timer);
-                                        resolve();
-                                    }
-                                }, 100);
-                            });
-                        }
-                    """)
-                    
-                    # Wait a bit more after scrolling for content to load
-                    await page.wait_for_timeout(5000)
-                    
-                    # Try to wait for common content selectors to appear
+                    # Navigate to the URL with optimized timeout handling
                     try:
-                        # Wait for at least some content to appear
-                        await page.wait_for_selector('body', timeout=10000)
+                        # Try to navigate with domcontentloaded (faster)
+                        await page.goto(url, wait_until="domcontentloaded", timeout=30000)  # Reduced from 45s
+                    except Exception as e:
+                        # If domcontentloaded times out, try with commit (even faster)
+                        print(f"Navigation timeout, trying commit state: {e}")
+                        try:
+                            await page.goto(url, wait_until="commit", timeout=20000)  # Reduced from 30s
+                        except Exception:
+                            # Last resort: just navigate without waiting much
+                            print("Commit state timeout, minimal wait navigation")
+                            await page.goto(url, timeout=15000, wait_until="commit")  # Reduced from 20s
+                    
+                    # Wait for page to be fully loaded with shorter timeout
+                    # Use "load" state but don't wait too long
+                    try:
+                        await page.wait_for_load_state("load", timeout=10000)  # Reduced from 15s to 10s
                     except Exception:
-                        pass
+                        # If load state times out, continue anyway (page might be ready)
+                        print("Load state timeout, continuing with current page state")
                     
-                    # Get page title directly from Playwright (more reliable)
-                    page_title = await page.title()
-                    
-                    # Get page HTML and timestamp before closing
-                    html_content = await page.content()
-                    if not html_content:
-                        raise Exception("Failed to get page content")
-                    
-                    # Also get text content directly from Playwright as fallback
+                    # Adaptive wait for dynamic content - check if content is already loaded
+                    # This reduces wait time if content loads quickly
                     try:
-                        body_text = await page.evaluate("""
+                        # Check if main content exists (article, main, or body with substantial content)
+                        content_ready = await page.evaluate("""
                             () => {
-                                // Remove script, style, nav, header, footer
-                                const elementsToRemove = document.querySelectorAll('script, style, noscript, nav, header, footer');
-                                elementsToRemove.forEach(el => el.remove());
+                                const main = document.querySelector('main, article, [role="main"]');
+                                const body = document.body;
+                                const hasContent = (main && main.innerText.length > 200) || 
+                                                  (body && body.innerText.length > 500);
+                                return hasContent;
+                            }
+                        """)
+                        
+                        if not content_ready:
+                            # Only wait if content isn't ready yet
+                            await page.wait_for_timeout(1500)  # Reduced from 2s to 1.5s
+                        else:
+                            # Content already loaded, minimal wait
+                            await page.wait_for_timeout(300)  # Reduced from 0.5s to 0.3s
+                    except Exception:
+                        # Fallback: wait 1.5s if check fails
+                        await page.wait_for_timeout(1500)
+                    
+                    # Instant scroll to bottom (much faster than incremental scrolling)
+                    # Only scroll if page is longer than viewport
+                    try:
+                        await page.evaluate("""
+                            () => {
+                                const scrollHeight = document.body.scrollHeight;
+                                const viewportHeight = window.innerHeight;
                                 
-                                // Get main content areas
-                                const mainContent = document.querySelector('main') || 
-                                                   document.querySelector('article') || 
-                                                   document.querySelector('[role="main"]') ||
-                                                   document.body;
-                                
-                                return mainContent ? mainContent.innerText : document.body.innerText;
+                                // Only scroll if content is longer than viewport
+                                if (scrollHeight > viewportHeight * 1.5) {
+                                    // Instant scroll to bottom to trigger lazy loading
+                                    window.scrollTo(0, scrollHeight);
+                                    // Small delay for lazy-loaded content
+                                    return new Promise(resolve => setTimeout(resolve, 200));  // Reduced from 300ms
+                                }
+                                return Promise.resolve();
                             }
                         """)
                     except Exception:
-                        body_text = ""
+                        # If scroll fails, continue anyway
+                        pass
                     
-                    # Get all links directly from Playwright with associated images
-                    try:
-                        page_links = await page.evaluate("""
-                            () => {
-                                const links = [];
-                                const linkElements = document.querySelectorAll('a[href]');
-                                const seen = new Set();
-                                
-                                linkElements.forEach(link => {
-                                    const href = link.getAttribute('href');
-                                    if (!href || href.startsWith('#') || href.startsWith('javascript:')) {
-                                        return;
-                                    }
+                    # Minimal wait after scroll (reduced from 0.5s to 0.3s)
+                    await page.wait_for_timeout(300)
+                    
+                    # Extract data in parallel for better performance
+                    async def get_title():
+                        try:
+                            return await asyncio.wait_for(page.title(), timeout=5.0)
+                        except asyncio.TimeoutError:
+                            return "Untitled"
+                    
+                    async def get_content():
+                        try:
+                            return await asyncio.wait_for(page.content(), timeout=10.0)
+                        except asyncio.TimeoutError:
+                            return ""
+                    
+                    async def get_body_text():
+                        try:
+                            return await asyncio.wait_for(page.evaluate("""
+                                () => {
+                                    // Remove script, style, nav, header, footer
+                                    const elementsToRemove = document.querySelectorAll('script, style, noscript, nav, header, footer');
+                                    elementsToRemove.forEach(el => el.remove());
                                     
-                                    const absoluteUrl = new URL(href, window.location.href).href;
-                                    if (seen.has(absoluteUrl)) return;
-                                    seen.add(absoluteUrl);
+                                    // Get main content areas
+                                    const mainContent = document.querySelector('main') || 
+                                                       document.querySelector('article') || 
+                                                       document.querySelector('[role="main"]') ||
+                                                       document.body;
                                     
-                                    const text = link.innerText.trim() || link.textContent.trim() || link.getAttribute('title') || '';
+                                    return mainContent ? mainContent.innerText : document.body.innerText;
+                                }
+                            """), timeout=8.0)
+                        except (asyncio.TimeoutError, Exception):
+                            return ""
+                    
+                    async def get_links():
+                        try:
+                            return await asyncio.wait_for(page.evaluate("""
+                                () => {
+                                    const links = [];
+                                    const linkElements = document.querySelectorAll('a[href]');
+                                    const seen = new Set();
                                     
-                                    // Find associated image
-                                    let imageUrl = '';
-                                    const imgInLink = link.querySelector('img');
-                                    if (imgInLink) {
-                                        const src = imgInLink.src || imgInLink.getAttribute('data-src') || imgInLink.getAttribute('data-lazy-src');
-                                        if (src && !src.startsWith('data:')) {
-                                            imageUrl = new URL(src, window.location.href).href;
+                                    linkElements.forEach(link => {
+                                        const href = link.getAttribute('href');
+                                        if (!href || href.startsWith('#') || href.startsWith('javascript:')) {
+                                            return;
                                         }
-                                    } else {
-                                        // Check parent for images
-                                        const parent = link.parentElement;
-                                        if (parent) {
-                                            const parentImg = parent.querySelector('img');
-                                            if (parentImg) {
-                                                const src = parentImg.src || parentImg.getAttribute('data-src');
-                                                if (src && !src.startsWith('data:')) {
-                                                    imageUrl = new URL(src, window.location.href).href;
+                                        
+                                        const absoluteUrl = new URL(href, window.location.href).href;
+                                        if (seen.has(absoluteUrl)) return;
+                                        seen.add(absoluteUrl);
+                                        
+                                        const text = link.innerText.trim() || link.textContent.trim() || link.getAttribute('title') || '';
+                                        
+                                        // Find associated image
+                                        let imageUrl = '';
+                                        const imgInLink = link.querySelector('img');
+                                        if (imgInLink) {
+                                            const src = imgInLink.src || imgInLink.getAttribute('data-src') || imgInLink.getAttribute('data-lazy-src');
+                                            if (src && !src.startsWith('data:')) {
+                                                imageUrl = new URL(src, window.location.href).href;
+                                            }
+                                        } else {
+                                            // Check parent for images
+                                            const parent = link.parentElement;
+                                            if (parent) {
+                                                const parentImg = parent.querySelector('img');
+                                                if (parentImg) {
+                                                    const src = parentImg.src || parentImg.getAttribute('data-src');
+                                                    if (src && !src.startsWith('data:')) {
+                                                        imageUrl = new URL(src, window.location.href).href;
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
+                                        
+                                        if (text.length > 3 || href.includes('/event') || href.includes('/article') || href.includes('/post')) {
+                                            links.push({
+                                                url: absoluteUrl, 
+                                                title: text.substring(0, 200),
+                                                image_url: imageUrl
+                                            });
+                                        }
+                                    });
                                     
-                                    if (text.length > 3 || href.includes('/event') || href.includes('/article') || href.includes('/post')) {
-                                        links.push({
-                                            url: absoluteUrl, 
-                                            title: text.substring(0, 200),
-                                            image_url: imageUrl
-                                        });
-                                    }
-                                });
-                                
-                                return links;
-                            }
-                        """)
-                    except Exception:
-                        page_links = []
+                                    return links;
+                                }
+                            """), timeout=10.0)
+                        except (asyncio.TimeoutError, Exception):
+                            return []
                     
-                    scraped_at = await page.evaluate("() => new Date().toISOString()")
+                    async def get_timestamp():
+                        try:
+                            return await asyncio.wait_for(page.evaluate("() => new Date().toISOString()"), timeout=2.0)
+                        except (asyncio.TimeoutError, Exception):
+                            return datetime.now().isoformat()
+                    
+                    # Execute all data extraction in parallel
+                    page_title, html_content, body_text, page_links, scraped_at = await asyncio.gather(
+                        get_title(),
+                        get_content(),
+                        get_body_text(),
+                        get_links(),
+                        get_timestamp()
+                    )
+                    
+                    if not html_content:
+                        raise Exception("Failed to get page content")
                     
                     # Close browser
                     await browser.close()
                 
                 # Use Playwright-extracted data as primary (works better for JS-heavy sites)
-                # Fallback to BeautifulSoup parsing if Playwright extraction failed
                 
                 # Use page_title from Playwright if available
                 final_title = page_title if page_title and page_title != "Untitled" else None
                 final_links = page_links if page_links else []
                 final_content = body_text if body_text else ""
                 
-                # Parse HTML with BeautifulSoup as fallback/enhancement
+                # ALWAYS parse HTML for LLM ad removal (second filter after network blocking)
+                # This catches any ads that slipped through the network-level filter
                 soup = None
                 try:
                     soup = BeautifulSoup(html_content, 'lxml')
-                except Exception:
-                    pass
+                    print(f"Parsing HTML for LLM ad removal (second filter)...")
+                except Exception as e:
+                    print(f"Failed to parse HTML: {e}")
                 
-                # If Playwright extraction didn't get much, try BeautifulSoup
-                if not final_title or final_title == "Untitled":
-                    if soup:
+                # Run LLM ad removal as second filter (always, not just for fallback)
+                if soup and self.openai_client:
+                    print("Running LLM ad removal as second filter...")
+                    soup = await self._remove_ads(soup, url)
+                    
+                    # Re-extract content from cleaned HTML for better quality
+                    cleaned_content = self._extract_content(soup)
+                    if cleaned_content and len(cleaned_content) > 100:
+                        # Use cleaned content if it's substantial
+                        final_content = cleaned_content
+                        print(f"Using LLM-cleaned content ({len(final_content)} chars)")
+                    
+                    # Filter links to remove any ad-related URLs that slipped through
+                    if final_links:
+                        original_link_count = len(final_links)
+                        final_links = self._filter_ad_links(final_links)
+                        filtered_count = original_link_count - len(final_links)
+                        if filtered_count > 0:
+                            print(f"Filtered {filtered_count} ad-related links")
+                
+                # Fallback to BeautifulSoup extraction if Playwright data is incomplete
+                needs_fallback = (
+                    (not final_title or final_title == "Untitled") or
+                    (not final_links or len(final_links) == 0) or
+                    (not final_content or len(final_content) < 100)
+                )
+                
+                if needs_fallback and soup:
+                    print("Using BeautifulSoup fallback for missing data...")
+                    
+                    # If Playwright extraction didn't get much, try BeautifulSoup
+                    if (not final_title or final_title == "Untitled"):
                         final_title = self._extract_title(soup)
-                
-                if not final_links or len(final_links) == 0:
-                    if soup:
+                    
+                    if (not final_links or len(final_links) == 0):
                         final_links = self._extract_article_links(soup, url)
+                    
+                    if (not final_content or len(final_content) < 100):
+                        soup_content = self._extract_content(soup)
+                        # Use BeautifulSoup content if it's longer/better
+                        if len(soup_content) > len(final_content):
+                            final_content = soup_content
                 
                 # Ensure all links have image_url field (add empty string if missing)
                 for link in final_links:
                     if 'image_url' not in link:
                         link['image_url'] = ''
-                
-                if not final_content or len(final_content) < 100:
-                    if soup:
-                        # Remove ads before extracting content
-                        soup = self._remove_ads(soup)
-                        soup_content = self._extract_content(soup)
-                        # Use BeautifulSoup content if it's longer/better
-                        if len(soup_content) > len(final_content):
-                            final_content = soup_content
                 
                 # Ensure we have at least something
                 if not final_title or final_title == "Untitled":
@@ -763,9 +1247,12 @@ class WebScraper:
                 traceback.print_exc()
                 raise
         
-        # Run the scraper
-        result = await run_scraper()
-        return result
+        # Run the scraper with a timeout to prevent hanging
+        try:
+            result = await asyncio.wait_for(run_scraper(), timeout=90.0)  # 90 second total timeout
+            return result
+        except asyncio.TimeoutError:
+            raise Exception("Scraping timeout: Operation took longer than 90 seconds")
 
 
 async def main():
