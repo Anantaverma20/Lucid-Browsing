@@ -49,25 +49,49 @@ chrome.runtime.onInstalled.addListener(async () => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type !== "interestlens:scrape") {
-    return false;
+  if (message?.type === "interestlens:scrape") {
+    const payload = { url: message.url };
+    if (message.refreshCache) {
+      payload.refresh_cache = true;
+    }
+    fetch("http://localhost:8000/scrape", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Status ${response.status}`);
+        }
+        const data = await response.json();
+        sendResponse({ ok: true, data });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: error?.message || "Request failed" });
+      });
+
+    return true;
   }
 
-  fetch("http://localhost:8000/scrape", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: message.url })
-  })
-    .then(async (response) => {
-      if (!response.ok) {
-        throw new Error(`Status ${response.status}`);
-      }
-      const data = await response.json();
-      sendResponse({ ok: true, data });
+  if (message?.type === "interestlens:authenticity") {
+    fetch("http://localhost:8001/check_authenticity/batch", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(message.payload)
     })
-    .catch((error) => {
-      sendResponse({ ok: false, error: error?.message || "Request failed" });
-    });
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Status ${response.status}`);
+        }
+        const data = await response.json();
+        sendResponse({ ok: true, data });
+      })
+      .catch((error) => {
+        sendResponse({ ok: false, error: error?.message || "Request failed" });
+      });
 
-  return true;
+    return true;
+  }
+
+  return false;
 });

@@ -233,6 +233,8 @@ async def check_authenticity_batch(
     )
 
     valid_results = [r for r in results if isinstance(r, AuthenticityCheckResponse)]
+    print ("Requested items: {request.items}")
+    print(f"Valid results: {valid_results}")
 
     return BatchAuthenticityResponse(
         results=valid_results,
@@ -267,4 +269,4 @@ async def get_authenticity_status(item_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)

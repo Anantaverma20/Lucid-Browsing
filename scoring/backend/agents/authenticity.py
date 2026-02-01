@@ -38,7 +38,7 @@ from services.weave_utils import (
 
 # Configure Gemini
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
-fast_model = genai.GenerativeModel("gemini-2.0-flash-lite")
+fast_model = genai.GenerativeModel("gemini-3-flash-preview")
 
 # Prompts
 CLAIM_EXTRACTION_PROMPT = """You are a fact-checking assistant analyzing a news article.

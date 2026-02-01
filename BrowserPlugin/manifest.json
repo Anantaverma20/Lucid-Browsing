@@ -4,7 +4,11 @@
   "version": "0.1.0",
   "description": "Shows a side panel with links from a local scraper.",
   "permissions": ["scripting", "tabs"],
-  "host_permissions": ["<all_urls>", "http://localhost:8000/*"],
+  "host_permissions": [
+    "<all_urls>",
+    "http://localhost:8000/*",
+    "http://localhost:8001/*"
+  ],
   "background": {
     "service_worker": "background.js"
   },

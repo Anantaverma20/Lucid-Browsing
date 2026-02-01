@@ -36,6 +36,7 @@ scraper = WebScraper()
 
 class ScrapeRequest(BaseModel):
     url: HttpUrl
+    refresh_cache: bool = False
 
 
 class ArticleLink(BaseModel):
@@ -156,6 +157,7 @@ async def scrape_url(request: ScrapeRequest):
     Scrape a URL and return structured data.
     
     - **url**: The website URL to scrape
+    - **refresh_cache**: Force refresh of Redis cache
     
     Returns JSON with:
     - title: Page title
@@ -164,8 +166,11 @@ async def scrape_url(request: ScrapeRequest):
     """
     try:
         url_str = str(request.url)
-        result = await scraper.scrape(url_str)
+        print(f"URL: {url_str}")
+        print(f"Refresh cache: {request.refresh_cache}")
+        result = await scraper.scrape(url_str, refresh_cache=request.refresh_cache)
         validated_result = validate_and_format_result(result, url_str)
+        print(f"Validated result: {validated_result}")
         return JSONResponse(content=validated_result)
         
     except HTTPException:

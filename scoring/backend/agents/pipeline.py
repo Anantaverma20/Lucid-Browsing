@@ -22,7 +22,7 @@ genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
 
 # Models
 vision_model = genai.GenerativeModel("gemini-2.0-flash")
-fast_model = genai.GenerativeModel("gemini-2.0-flash")
+fast_model = genai.GenerativeModel("gemini-3-flash-preview")
 embedding_model = "models/text-embedding-004"
 
 # Topic categories
