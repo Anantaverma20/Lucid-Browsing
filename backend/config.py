@@ -38,6 +38,18 @@ DAYTONA_TARGET: str | None = None
 DAYTONA_SANDBOX_LANGUAGE: str | None = None
 HEADLESS_BROWSER_TIMEOUT_MS: int = 15000
 
+# --- Composio (optional "Bridge" for Gmail, Notion, Calendar, etc.) ---
+
+
+def is_composio_enabled() -> bool:
+    """True if Composio integration is configured (COMPOSIO_API_KEY set)."""
+    return bool(os.getenv("COMPOSIO_API_KEY", "").strip())
+
+
+def get_composio_entity_id() -> str | None:
+    """Composio entity (user) id for connected accounts. Set COMPOSIO_ENTITY_ID in .env to match the user_id in Composio dashboard."""
+    return _optional("COMPOSIO_ENTITY_ID")
+
 
 def ensure_automation_config() -> None:
     """Load automation env once. Call before using /automate. Raises if required keys missing."""

@@ -15,6 +15,7 @@ def create_planner() -> LlmAgent:
             "Input: user_command={user_command}, url={url}. "
             "Page structure (real elements from the page, one per line: tag#id.class \"text\"): {page_context}. "
             "Use page_context to make the task spec concrete: mention actual selectors (id, class) that appear in page_context when they match the user's intent (e.g. 'remove #right-rail-ad', 'hide .sidebar'). "
+            "When the user wants to save or summarize post content and profile (e.g. LinkedIn feed, profile page): include in the task spec that any 'see more' / '...more' / expand links for posts should be clicked first so full post text is visible for capture; then capture profile info (name, headline, viewers, impressions) and post content/summaries. "
             "Output a short, structured task spec (plain text), no code."
         ),
         output_key="task_spec",

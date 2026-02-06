@@ -12,3 +12,6 @@ daytona_sdk>=0.136.0
 
 # Headless browser (execution validation on real page)
 playwright>=1.40.0
+
+# Optional: Composio "Bridge" for Gmail, Notion, Calendar, Linear/Jira, etc. (set COMPOSIO_API_KEY to enable)
+composio-gemini>=0.8.0

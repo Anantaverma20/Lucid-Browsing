@@ -1,6 +1,10 @@
 """
 Executor agent: if validation_ok, run automation_script in a real headless browser at the page URL.
 Sets execution_ok / execution_error from the headless run result.
+
+Composio "Utility Belt" (Gmail, Notion, Calendar, etc.) is wired separately: see
+backend.services.composio_bridge and the optional connector step in backend.routes.automate.
+When COMPOSIO_API_KEY is set, the /automate route runs a Connector step after the pipeline.
 """
 import logging
 from typing import AsyncGenerator

@@ -1064,8 +1064,13 @@ Selectors:"""
                     
                     async def get_content():
                         try:
-                            return await asyncio.wait_for(page.content(), timeout=10.0)
+                            html = await asyncio.wait_for(page.content(), timeout=15.0)
+                            return html or ""
                         except asyncio.TimeoutError:
+                            print("get_content: page.content() timed out after 15s")
+                            return ""
+                        except Exception as e:
+                            print(f"get_content: {type(e).__name__}: {e}")
                             return ""
                     
                     async def get_body_text():
@@ -1161,7 +1166,11 @@ Selectors:"""
                     )
                     
                     if not html_content:
-                        raise Exception("Failed to get page content")
+                        raise Exception(
+                            "Failed to get page content: page.content() returned empty or timed out. "
+                            "Possible causes: slow/heavy page, load timeout, bot blocking, or network issue. "
+                            "Try again or use a different URL."
+                        )
                     
                     # Close browser
                     await browser.close()
