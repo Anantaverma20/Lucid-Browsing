@@ -1,0 +1,14 @@
+fastapi>=0.109.0
+uvicorn>=0.27.0
+python-dotenv>=1.0.0
+pydantic>=2.5.0
+
+# Google ADK (Gemini)
+google-genai>=1.0.0
+google-adk>=1.0.0
+
+# Daytona sandbox (parse-only validation)
+daytona_sdk>=0.136.0
+
+# Headless browser (execution validation on real page)
+playwright>=1.40.0

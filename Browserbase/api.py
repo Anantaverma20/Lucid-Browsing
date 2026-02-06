@@ -8,12 +8,13 @@ from typing import Optional, List
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pathlib import Path
 from pydantic import BaseModel, HttpUrl
 from dotenv import load_dotenv
-from scraper import WebScraper
+from .scraper import WebScraper
 
-# Load environment variables
-load_dotenv()
+# Load .env from repo root (parent of Browserbase/)
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 app = FastAPI(
     title="InterestLens Web Scraper",

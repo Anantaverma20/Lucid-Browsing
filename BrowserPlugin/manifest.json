@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "InterestLens",
   "version": "2.0.0",
-  "description": "AI-powered content authenticity checker with voice interaction. Analyzes articles and helps you focus on what matters.",
+  "description": "Scrape pages and view article links via the Browserbase API.",
   "permissions": [
     "scripting",
     "tabs",
@@ -12,8 +12,7 @@
   "host_permissions": [
     "<all_urls>",
     "http://localhost:8000/*",
-    "http://localhost:8001/*",
-    "https://api.daily.co/*"
+    "http://localhost:8001/*"
   ],
   "background": {
     "service_worker": "background.js"

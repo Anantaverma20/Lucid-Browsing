@@ -1,35 +1,5 @@
-// API endpoints
-const SCRAPER_API = "http://localhost:8000";
-const SCORING_API = "http://localhost:8001";
-
-// NOTE: Content scripts are automatically injected by manifest.json content_scripts
-// We don't need to manually inject them on tab updates - that causes duplicates!
-
-// Send DOM action to content script
-const sendDomAction = async (tabId, action, params = {}) => {
-  try {
-    const response = await chrome.tabs.sendMessage(tabId, {
-      type: "interestlens:dom-action",
-      action,
-      params
-    });
-    return response;
-  } catch (error) {
-    console.error("Failed to send DOM action:", error);
-    return { ok: false, error: error.message };
-  }
-};
-
-// Toggle sidebar visibility
-const toggleSidebar = async (tabId) => {
-  try {
-    await chrome.tabs.sendMessage(tabId, {
-      type: "interestlens:toggle-sidebar"
-    });
-  } catch (error) {
-    console.error("Failed to toggle sidebar:", error);
-  }
-};
+// Backend (agents + scrape) – port 8001; scraper API stays on 8000
+const API_BASE = "http://localhost:8001";
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // Scrape request
@@ -38,88 +8,172 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.refreshCache) {
       payload.refresh_cache = true;
     }
-    
-    fetch(`${SCRAPER_API}/scrape`, {
+
+    fetch(`${API_BASE}/scrape`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     })
       .then(async (response) => {
         if (!response.ok) {
-          throw new Error(`Status ${response.status}`);
+          const data = await response.json().catch(() => ({}));
+          const msg = response.status === 404 ? "Not Found (wrong port?). Backend must run on 8001." : `Scrape failed (${response.status}).`;
+          sendResponse({ ok: false, error: msg, detail: data.detail || msg });
+          return;
         }
         const data = await response.json();
         sendResponse({ ok: true, data });
       })
       .catch((error) => {
-        sendResponse({ ok: false, error: error?.message || "Request failed" });
+        const msg = (error?.message || "").toLowerCase();
+        const detail = msg.includes("fetch") || msg.includes("network") || msg.includes("failed")
+          ? "Cannot reach backend on port 8001. Start it: run run_backend.bat in project folder."
+          : (error?.message || "Request failed");
+        sendResponse({ ok: false, error: "Backend unreachable", detail });
       });
 
     return true;
   }
 
-  // Authenticity check request
-  if (message?.type === "interestlens:authenticity") {
-    fetch(`${SCORING_API}/check_authenticity/batch`, {
+  // Automate request: backend validates/generates script; we execute it in the user's active tab
+  if (message?.type === "interestlens:automate") {
+    const url = message.url || "";
+    const command = message.command || "";
+    const pageContext = message.pageContext != null ? String(message.pageContext) : undefined;
+    if (!url || !command) {
+      sendResponse({ ok: false, error: "Missing url or command", detail: "url and command are required" });
+      return true;
+    }
+
+    const body = { url, command };
+    if (pageContext !== undefined) body.page_context = pageContext;
+
+    fetch(`${API_BASE}/automate/`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(message.payload)
+      body: JSON.stringify(body)
     })
       .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw new Error(`Status ${response.status}`);
-        }
-        const data = await response.json();
-        sendResponse({ ok: true, data });
-      })
-      .catch((error) => {
-        sendResponse({ ok: false, error: error?.message || "Request failed" });
-      });
-
-    return true;
-  }
-
-  // Voice session request (Daily + Pipecat)
-  if (message?.type === "interestlens:voice-session") {
-    fetch(`${SCORING_API}/voice/start-session`, {
-      method: "POST",
-      headers: { 
-        "Content-Type": "application/json"
-      }
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          if (response.status === 401 || response.status === 403) {
-            throw new Error("Authentication required. Using browser voice recognition instead.");
+          let detail = data.detail || data.error;
+          if (!detail) {
+            if (response.status === 404) detail = "Not Found. Start backend on 8001: run run_backend.bat.";
+            else if (response.status === 500) detail = "Server error. Check backend logs.";
+            else detail = `Request failed (${response.status}).`;
           }
-          throw new Error(`Status ${response.status}`);
+          sendResponse({
+            ok: false,
+            error: data.error || "Request failed",
+            detail
+          });
+          return;
         }
-        const data = await response.json();
-        sendResponse({ ok: true, data });
+        // Backend returns script when validation passed; we run it in the user's tab (validate on server, execute on client)
+        if (!data.ok || !data.script) {
+          const detail = (data.error || data.detail || "No script returned. Check backend logs or try again.").slice(0, 500);
+          sendResponse({
+            ok: false,
+            error: (data.error || "Automation failed").slice(0, 200),
+            detail
+          });
+          return;
+        }
+        // Automation request comes from the sidebar on the active page; sender.tab.id is the most reliable.
+        let tabId = sender.tab?.id;
+        if (tabId == null) {
+          const [activeTab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+          tabId = activeTab?.id ?? null;
+        }
+        if (tabId == null) {
+          sendResponse({ ok: false, error: "No tab", detail: "Cannot inject script. Open the page you want to automate and try again." });
+          return;
+        }
+        try {
+          const commands = Array.isArray(data.commands) ? data.commands : [];
+          const useCommands = commands.length > 0;
+
+          if (useCommands) {
+            // CSP-safe: run structured commands in ISOLATED world (no eval, no inline script).
+            const runResult = await chrome.scripting.executeScript({
+              target: { tabId },
+              world: "ISOLATED",
+              func: (cmdList) => {
+                try {
+                  for (const cmd of cmdList) {
+                    const t = (cmd && cmd.type) || "";
+                    if (t === "hide" || t === "remove") {
+                      const sel = cmd.selector;
+                      if (sel && typeof sel === "string") {
+                        document.querySelectorAll(sel).forEach((el) => {
+                          if (t === "remove") el.remove();
+                          else el.style.display = "none";
+                        });
+                      }
+                    } else if (t === "click") {
+                      const sel = cmd.selector;
+                      if (sel && typeof sel === "string") {
+                        const el = document.querySelector(sel);
+                        if (el) el.click();
+                      }
+                    } else if (t === "scroll" && typeof cmd.x === "number" && typeof cmd.y === "number") {
+                      window.scrollBy(cmd.x, cmd.y);
+                    }
+                  }
+                  return null;
+                } catch (e) {
+                  return { error: (e && e.message) || String(e) };
+                }
+              },
+              args: [commands]
+            });
+            const first = runResult && runResult[0];
+            const res = first && first.result;
+            if (res && typeof res === "object" && res.error) {
+              sendResponse({ ok: false, error: "Script error", detail: res.error });
+              return;
+            }
+          } else {
+            // No CSP-safe command list was derived from the script; we only run structured commands (no eval).
+            sendResponse({
+              ok: false,
+              error: "Script could not be run on this page",
+              detail: "The backend could not derive safe commands from the script for this page. Try a simpler command (e.g. \"hide the weather card\" or \"remove the weather card\") or a different page."
+            });
+            return;
+          }
+
+          await chrome.scripting.executeScript({
+            target: { tabId },
+            world: "ISOLATED",
+            func: () => {
+              const toast = document.createElement("div");
+              toast.textContent = "InterestLens: script ran";
+              toast.style.cssText = "position:fixed;bottom:16px;right:16px;z-index:2147483647;padding:8px 14px;background:#6366f1;color:#fff;border-radius:8px;font-family:system-ui,sans-serif;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,0.2);";
+              document.body.appendChild(toast);
+              setTimeout(() => toast.remove(), 2500);
+            }
+          });
+          sendResponse({ ok: true });
+        } catch (injectError) {
+          sendResponse({
+            ok: false,
+            error: "Injection failed",
+            detail: injectError?.message || String(injectError)
+          });
+        }
       })
       .catch((error) => {
-        sendResponse({ 
-          ok: false, 
-          error: error?.message || "Voice session unavailable",
-          fallback: "web-speech-api"
+        const msg = (error?.message || "").toLowerCase();
+        const detail = msg.includes("fetch") || msg.includes("network") || msg.includes("failed")
+          ? "Cannot reach backend on port 8001. Start it: run run_backend.bat in project folder."
+          : (error?.message || "Backend may be down. Run run_backend.bat on port 8001.");
+        sendResponse({
+          ok: false,
+          error: "Request failed",
+          detail
         });
       });
-
-    return true;
-  }
-
-  // DOM action request (from voice commands or other sources)
-  if (message?.type === "interestlens:execute-dom-action") {
-    const { action, params } = message;
-    
-    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
-      if (tabs.length > 0) {
-        const result = await sendDomAction(tabs[0].id, action, params);
-        sendResponse(result);
-      } else {
-        sendResponse({ ok: false, error: "No active tab" });
-      }
-    });
 
     return true;
   }
@@ -127,12 +181,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-// Handle keyboard shortcuts
 chrome.commands?.onCommand?.addListener((command) => {
   if (command === "toggle-sidebar") {
-    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs.length > 0) {
-        await toggleSidebar(tabs[0].id);
+        chrome.tabs.sendMessage(tabs[0].id, { type: "interestlens:toggle-sidebar" });
       }
     });
   }

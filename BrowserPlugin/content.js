@@ -124,44 +124,27 @@
     </div>
   `;
 
-  // Stats
-  const stats = document.createElement("div");
-  stats.className = "il-stats";
-  stats.innerHTML = `
-    <div class="il-stat-card">
-      <div class="il-stat-value" id="il-stat-avg">--</div>
-      <div class="il-stat-label">Avg Score</div>
+  // Automation section (command input + Run)
+  const automationSection = document.createElement("div");
+  automationSection.className = "il-automation";
+  automationSection.innerHTML = `
+    <label class="il-automation-label">Automate this page</label>
+    <div class="il-automation-row">
+      <input type="text" id="il-automate-input" class="il-automate-input" placeholder="e.g. Click the login button" />
+      <button type="button" id="il-automate-run" class="il-btn il-automate-run" aria-label="Run">Run</button>
+      <button type="button" id="il-automate-voice" class="il-btn il-automate-voice" aria-label="Voice">${ICONS.mic}</button>
     </div>
-    <div class="il-stat-card">
-      <div class="il-stat-value" id="il-stat-count">0</div>
-      <div class="il-stat-label">Items</div>
-    </div>
-    <div class="il-stat-card">
-      <div class="il-stat-value il-stat-good" id="il-stat-verified">0</div>
-      <div class="il-stat-label">Verified</div>
-    </div>
+    <div id="il-automate-status" class="il-automate-status" aria-live="polite"></div>
   `;
 
-  // Body
+  // Body (cards from scrape)
   const body = document.createElement("div");
   body.className = "il-body";
 
-  // Voice Section
-  const voiceSection = document.createElement("div");
-  voiceSection.className = "il-voice-section";
-  voiceSection.innerHTML = `
-    <button class="il-voice-btn" id="il-voice-btn" type="button">
-      <span class="il-voice-icon">${ICONS.mic}</span>
-      <span>Ask InterestLens</span>
-    </button>
-    <div class="il-voice-status" id="il-voice-status"></div>
-  `;
-
   // Assemble
   wrapper.appendChild(header);
-  wrapper.appendChild(stats);
+  wrapper.appendChild(automationSection);
   wrapper.appendChild(body);
-  wrapper.appendChild(voiceSection);
   shadowRoot.appendChild(styleLink);
   shadowRoot.appendChild(wrapper);
 
@@ -190,62 +173,51 @@
   };
 
   // Attach to DOM
-  document.documentElement.appendChild(host);
-  document.documentElement.appendChild(toggleBtn);
-  document.head.appendChild(pageStyle);
-  
-  // Position toggle button correctly
-  toggleBtn.style.right = '360px';
+  const attachSidebar = () => {
+    if (!host.isConnected) {
+      document.documentElement.appendChild(host);
+    }
+    if (!toggleBtn.isConnected) {
+      document.documentElement.appendChild(toggleBtn);
+    }
+    if (!pageStyle.isConnected) {
+      document.head.appendChild(pageStyle);
+    }
+    toggleBtn.style.right = isCollapsed ? '0' : '360px';
+  };
+  attachSidebar();
+
+  // Re-attach if the page (e.g. Yahoo SPA) removes our nodes
+  const observer = new MutationObserver(() => {
+    if (!host.isConnected || !toggleBtn.isConnected) {
+      attachSidebar();
+    }
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
 
   // Toggle button click
   toggleBtn.addEventListener("click", toggleSidebar);
 
-  // Get references from shadow DOM
   const refreshBtn = shadowRoot.getElementById("il-refresh-btn");
-  const voiceBtn = shadowRoot.getElementById("il-voice-btn");
-  const voiceStatus = shadowRoot.getElementById("il-voice-status");
 
-  // Update voice status
-  const updateVoiceStatus = (message) => {
-    if (voiceStatus) {
-      voiceStatus.textContent = message;
-      voiceStatus.classList.add("il-visible");
-      setTimeout(() => voiceStatus.classList.remove("il-visible"), 3000);
-    }
-  };
+  const automateInput = shadowRoot.getElementById("il-automate-input");
+  const automateRunBtn = shadowRoot.getElementById("il-automate-run");
+  const automateVoiceBtn = shadowRoot.getElementById("il-automate-voice");
+  const automateStatus = shadowRoot.getElementById("il-automate-status");
 
-  // Update stats
-  const updateStats = (avgScore, count, verified) => {
-    const avgEl = shadowRoot.getElementById("il-stat-avg");
-    const countEl = shadowRoot.getElementById("il-stat-count");
-    const verifiedEl = shadowRoot.getElementById("il-stat-verified");
-
-    if (avgEl) {
-      avgEl.textContent = avgScore !== null && avgScore !== undefined ? avgScore.toFixed(0) : "--";
-      avgEl.className = "il-stat-value";
-      if (avgScore !== null && avgScore !== undefined) {
-        if (avgScore >= 80) avgEl.classList.add("il-stat-good");
-        else if (avgScore >= 50) avgEl.classList.add("il-stat-warning");
-        else avgEl.classList.add("il-stat-danger");
-      }
-    }
-    if (countEl) countEl.textContent = count;
-    if (verifiedEl) verifiedEl.textContent = verified;
-  };
-
-  // Expose API
   window.__interestLensSidebar = {
     host,
     shadowRoot,
     body,
     refreshBtn,
-    voiceBtn,
-    voiceStatus,
     toggleBtn,
+    automateInput,
+    automateRunBtn,
+    automateVoiceBtn,
+    automateStatus,
+    observer,
     isCollapsed: () => isCollapsed,
     toggle: toggleSidebar,
-    updateVoiceStatus,
-    updateStats,
     ICONS
   };
 

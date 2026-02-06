@@ -257,49 +257,66 @@
   color: white;
 }
 
-/* Stats Section */
-.il-stats {
-  display: flex;
-  gap: 12px;
-  padding: 16px 20px;
-  background: var(--il-bg-secondary);
+/* Automation section */
+.il-automation {
+  padding: 12px 20px;
   border-bottom: 1px solid var(--il-border-color);
-}
-
-.il-stat-card {
-  flex: 1;
   background: var(--il-bg-primary);
-  border-radius: var(--il-radius-md);
-  padding: 12px;
-  text-align: center;
+}
+.il-automation-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--il-text-secondary);
+  margin-bottom: 8px;
+}
+.il-automation-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.il-automate-input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 12px;
   border: 1px solid var(--il-border-color);
-}
-
-.il-stat-value {
-  font-size: 24px;
-  font-weight: 700;
+  border-radius: var(--il-radius-md);
+  font-size: 14px;
+  background: var(--il-bg-primary);
   color: var(--il-text-primary);
-  line-height: 1.2;
 }
-
-.il-stat-value.il-stat-good {
+.il-automate-input::placeholder {
+  color: var(--il-text-muted);
+}
+.il-automate-input:focus {
+  outline: none;
+  border-color: var(--il-accent);
+}
+.il-automate-run,
+.il-automate-voice {
+  flex-shrink: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+}
+.il-automate-voice {
+  padding: 8px;
+}
+.il-automate-voice svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+}
+.il-automate-status {
+  font-size: 12px;
+  margin-top: 8px;
+  min-height: 18px;
+  color: var(--il-text-muted);
+}
+.il-automate-status.il-success {
   color: var(--il-success);
 }
-
-.il-stat-value.il-stat-warning {
-  color: var(--il-warning);
-}
-
-.il-stat-value.il-stat-danger {
+.il-automate-status.il-error {
   color: var(--il-danger);
-}
-
-.il-stat-label {
-  font-size: 11px;
-  color: var(--il-text-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  margin-top: 4px;
 }
 
 /* Body / Cards Container */
@@ -490,6 +507,135 @@
 }
 
 /* Voice Section */
+/* Chat section */
+.il-chat-section {
+  padding: 12px 20px;
+  border-top: 1px solid var(--il-border-color);
+  background: var(--il-bg-primary);
+}
+
+.il-chat-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--il-text-secondary);
+  margin-bottom: 4px;
+}
+
+.il-chat-hint {
+  font-size: 11px;
+  color: var(--il-text-muted);
+  margin-bottom: 8px;
+  line-height: 1.3;
+}
+
+.il-chat-messages {
+  min-height: 60px;
+  max-height: 160px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+  background: var(--il-bg-secondary);
+  border-radius: var(--il-radius-md);
+}
+
+.il-chat-messages::-webkit-scrollbar {
+  width: 6px;
+}
+
+.il-chat-messages::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.il-chat-messages::-webkit-scrollbar-thumb {
+  background: var(--il-border-color);
+  border-radius: var(--il-radius-full);
+}
+
+.il-chat-messages::-webkit-scrollbar-thumb:hover {
+  background: var(--il-text-muted);
+}
+
+.il-chat-bubble {
+  max-width: 92%;
+  align-self: flex-start;
+}
+
+.il-chat-bubble.il-chat-user {
+  align-self: flex-end;
+}
+
+.il-chat-bubble-inner {
+  padding: 8px 12px;
+  border-radius: var(--il-radius-md);
+  font-size: 13px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.il-chat-user .il-chat-bubble-inner {
+  background: linear-gradient(135deg, var(--il-accent) 0%, #a855f7 100%);
+  color: white;
+}
+
+.il-chat-assistant .il-chat-bubble-inner {
+  background: var(--il-bg-primary);
+  color: var(--il-text-primary);
+  border: 1px solid var(--il-border-color);
+}
+
+.il-chat-input-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.il-chat-input {
+  flex: 1;
+  padding: 10px 12px;
+  border: 1px solid var(--il-border-color);
+  border-radius: var(--il-radius-md);
+  background: var(--il-bg-secondary);
+  color: var(--il-text-primary);
+  font-size: 13px;
+  outline: none;
+  transition: border-color var(--il-transition);
+}
+
+.il-chat-input:focus {
+  border-color: var(--il-accent);
+}
+
+.il-chat-input::placeholder {
+  color: var(--il-text-muted);
+}
+
+.il-chat-send {
+  padding: 10px 16px;
+  background: linear-gradient(135deg, var(--il-accent) 0%, #a855f7 100%);
+  color: white;
+  border: none;
+  border-radius: var(--il-radius-md);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all var(--il-transition);
+  white-space: nowrap;
+}
+
+.il-chat-send:hover:not(:disabled) {
+  filter: brightness(1.08);
+  transform: translateY(-1px);
+}
+
+.il-chat-send:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
 .il-voice-section {
   padding: 16px 20px;
   border-top: 1px solid var(--il-border-color);
@@ -560,6 +706,19 @@
 
 .il-voice-status.il-visible {
   display: block;
+}
+
+.il-voice-call-link,
+.il-voice-hint {
+  display: block;
+  margin-top: 8px;
+  font-size: 11px;
+  color: var(--il-text-muted);
+  text-decoration: none;
+}
+.il-voice-call-link:hover {
+  color: var(--il-text-secondary);
+  text-decoration: underline;
 }
 
 /* Empty State */
@@ -652,4 +811,46 @@
   display: block;
   object-fit: contain;
   box-sizing: border-box;
+}
+
+/* Daily voice call embed */
+.il-daily-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 320px;
+  background: var(--il-bg-secondary);
+  border-radius: var(--il-radius-md);
+  overflow: hidden;
+}
+.il-daily-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--il-bg-primary);
+  font-size: 12px;
+  color: var(--il-text-secondary);
+}
+.il-daily-leave {
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--il-text-primary);
+  background: var(--il-bg-secondary);
+  border: 1px solid var(--il-border);
+  border-radius: var(--il-radius-sm);
+  cursor: pointer;
+}
+.il-daily-leave:hover {
+  background: var(--il-danger-bg);
+  color: var(--il-danger);
+  border-color: var(--il-danger);
+}
+.il-daily-iframe {
+  flex: 1;
+  width: 100%;
+  min-height: 280px;
+  border: none;
+  display: block;
 }

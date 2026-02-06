@@ -1,28 +1,26 @@
 (() => {
-  // Wait for sidebar to be initialized
   const sidebar = window.__interestLensSidebar;
   if (!sidebar) {
     console.log("InterestLens: Waiting for sidebar...");
     return;
   }
-
-  // Prevent duplicate initialization
-  if (sidebar._initialized) {
-    return;
-  }
+  if (sidebar._initialized) return;
   sidebar._initialized = true;
 
   const MAX_CARDS = 12;
   const ICONS = sidebar.ICONS || {};
 
-  // Voice state
-  let voiceState = 'idle';
-  let recognition = null;
+  const normalizeExtensionError = (msg) => {
+    if (!msg || typeof msg !== "string") return msg;
+    const m = msg.toLowerCase();
+    if (m.includes("extension context invalidated") || m.includes("context invalidated")) {
+      return "Extension was reloaded. Refresh this page (F5) and try again.";
+    }
+    return msg;
+  };
 
   const clearBody = () => {
-    if (sidebar.body) {
-      sidebar.body.innerHTML = "";
-    }
+    if (sidebar.body) sidebar.body.innerHTML = "";
   };
 
   const renderLoading = (message = "Loading...") => {
@@ -41,9 +39,9 @@
     if (!sidebar.body) return;
     sidebar.body.innerHTML = `
       <div class="il-empty">
-        <div class="il-empty-icon">${ICONS.empty || ''}</div>
-        <div class="il-empty-title">${title || 'No content found'}</div>
-        <div class="il-empty-desc">${desc || 'Try a different page.'}</div>
+        <div class="il-empty-icon">${ICONS.empty || ""}</div>
+        <div class="il-empty-title">${title || "No content found"}</div>
+        <div class="il-empty-desc">${desc || "Try a different page."}</div>
       </div>
     `;
   };
@@ -53,24 +51,10 @@
     if (!sidebar.body) return;
     sidebar.body.innerHTML = `
       <div class="il-error">
-        <div class="il-error-icon">${ICONS.alert || ''}</div>
-        <div class="il-error-text">${message || 'Something went wrong'}</div>
+        <div class="il-error-icon">${ICONS.alert || ""}</div>
+        <div class="il-error-text">${message || "Something went wrong"}</div>
       </div>
     `;
-  };
-
-  const getScoreClass = (score) => {
-    if (score == null) return 'il-badge-loading';
-    if (score >= 80) return 'il-badge-good';
-    if (score >= 50) return 'il-badge-warning';
-    return 'il-badge-danger';
-  };
-
-  const getScoreIcon = (score) => {
-    if (score == null) return '';
-    if (score >= 80) return ICONS.check || '';
-    if (score >= 50) return ICONS.warning || '';
-    return ICONS.alert || '';
   };
 
   const buildCard = (data) => {
@@ -79,41 +63,21 @@
     card.href = data.url;
     card.target = "_blank";
     card.rel = "noopener";
-
     const hasImage = data.imageUrl && data.imageUrl.length > 0;
-    
     let domain = data.url;
     try {
-      domain = new URL(data.url).hostname.replace('www.', '');
+      domain = new URL(data.url).hostname.replace("www.", "");
     } catch (e) {}
-
     card.innerHTML = `
       <div class="il-card-image">
         ${hasImage ? `<img src="${data.imageUrl}" alt="" loading="lazy" onerror="this.parentElement.innerHTML='<div class=il-card-placeholder>No image</div>'">` : '<div class="il-card-placeholder">No image</div>'}
       </div>
       <div class="il-card-content">
-        <div class="il-card-title">${data.title || 'Untitled'}</div>
-        <div class="il-card-desc">${domain}</div>
-        <div class="il-badge il-badge-loading"><span>Checking...</span></div>
+        <div class="il-card-title">${(data.title || "Untitled").replace(/</g, "&lt;")}</div>
+        <div class="il-card-desc">${domain.replace(/</g, "&lt;")}</div>
       </div>
     `;
-
     return card;
-  };
-
-  const updateCardBadge = (card, score) => {
-    const badge = card.querySelector('.il-badge');
-    if (!badge) return;
-    
-    const scoreClass = getScoreClass(score);
-    const icon = getScoreIcon(score);
-    badge.className = `il-badge ${scoreClass}`;
-    
-    if (score == null) {
-      badge.innerHTML = `<span>N/A</span>`;
-    } else {
-      badge.innerHTML = `<span class="il-badge-icon">${icon}</span><span>${score}% authentic</span>`;
-    }
   };
 
   const requestScrape = (url, refreshCache = false) => {
@@ -123,7 +87,7 @@
           { type: "interestlens:scrape", url, refreshCache },
           (response) => {
             if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message));
+              reject(new Error(normalizeExtensionError(chrome.runtime.lastError.message)));
               return;
             }
             if (!response || !response.ok) {
@@ -134,194 +98,145 @@
           }
         );
       } catch (e) {
-        reject(e);
+        reject(new Error(normalizeExtensionError(e?.message || "Request failed")));
       }
     });
   };
 
-  const requestAuthenticity = (payload) => {
+  // Capture page structure (DOM summary) from the actual tab the user sees.
+  // Logic adapted from backend/services/headless_browser.py _DOM_SUMMARY_SCRIPT.
+  const getPageContext = () => {
+    const lines = [];
+    const maxLines = 150;
+    const textLen = 50;
+    const maxChars = 6000;
+    const seen = new Set();
+    const validClass = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
+    const validId = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
+    const add = (el) => {
+      if (lines.length >= maxLines || !el || seen.has(el)) return;
+      seen.add(el);
+      const id = el.id && validId.test(el.id) ? "#" + el.id : "";
+      let cls = "";
+      if (typeof el.className === "string" && el.className) {
+        const safe = el.className.trim().split(/\s+/).filter((c) => validClass.test(c)).slice(0, 3);
+        if (safe.length) cls = "." + safe.join(".");
+      }
+      const tag = el.tagName ? el.tagName.toLowerCase() : "?";
+      let text = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, textLen);
+      if (text) text = ' "' + text + '"';
+      lines.push(tag + id + cls + text);
+    };
+    try {
+      const semantic = 'section, article, aside, main, header, footer, nav, [role="region"], [role="complementary"], [role="main"], [role="banner"], [role="contentinfo"]';
+      const commonUI = '[class*="card"], [class*="widget"], [class*="item"], [class*="block"], [class*="box"], [class*="panel"], [class*="container"], [class*="section"], .sidebar, .side-bar, .feed-item, .promo, .banner, [data-testid], [data-component]';
+      const adsWeather = '[id*="ad"], [id*="Ad"], [class*="ad"], [class*="Ad"], [data-ad], .sponsored, [class*="sponsor"], [id*="banner"], [id*="weather"], [id*="Weather"], [class*="weather"], [class*="Weather"]';
+      const youtube = "ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer";
+      document.querySelectorAll([semantic, commonUI, adsWeather, youtube].join(", ")).forEach(add);
+      document.querySelectorAll("[id]").forEach(add);
+      let summary = lines.join("\n");
+      if (summary.length > maxChars) summary = summary.slice(0, maxChars - 3).trimEnd() + "...";
+      return summary;
+    } catch (e) {
+      return "Error: " + (e.message || String(e)).slice(0, 200);
+    }
+  };
+
+  const requestAutomate = (url, command) => {
     return new Promise((resolve, reject) => {
       try {
+        const pageContext = getPageContext();
         chrome.runtime.sendMessage(
-          { type: "interestlens:authenticity", payload },
+          { type: "interestlens:automate", url, command, pageContext },
           (response) => {
             if (chrome.runtime.lastError) {
-              reject(new Error(chrome.runtime.lastError.message));
+              reject(new Error(normalizeExtensionError(chrome.runtime.lastError.message)));
               return;
             }
-            if (!response || !response.ok) {
-              reject(new Error(response?.error || "Authenticity failed"));
+            if (!response) {
+              reject(new Error("No response"));
               return;
             }
-            resolve(response.data);
+            if (response.ok) {
+              resolve(response);
+            } else if (response && !response.ok) {
+              reject(new Error(response.detail || response.error || "Automation failed"));
+            }
           }
         );
       } catch (e) {
-        reject(e);
+        reject(new Error(normalizeExtensionError(e?.message || "Request failed")));
       }
     });
+  };
+
+  const setAutomateStatus = (text, isError = false) => {
+    if (!sidebar.automateStatus) return;
+    sidebar.automateStatus.textContent = text || "";
+    sidebar.automateStatus.className = "il-automate-status" + (isError ? " il-error" : text ? " il-success" : "");
+  };
+
+  const runAutomation = async () => {
+    const input = sidebar.automateInput;
+    const command = (input?.value || "").trim();
+    if (!command) {
+      setAutomateStatus("Enter a command first.", true);
+      return;
+    }
+    setAutomateStatus("Running...");
+    try {
+      await requestAutomate(window.location.href, command);
+      setAutomateStatus("Script run on this page.");
+      if (input) input.value = "";
+    } catch (e) {
+      setAutomateStatus(e?.message || "Automation failed", true);
+    }
   };
 
   const loadCards = async (refreshCache = false) => {
     renderLoading("Scanning page for content...");
-    if (sidebar.updateStats) sidebar.updateStats(null, 0, 0);
-
     try {
       const data = await requestScrape(window.location.href, refreshCache);
       const links = Array.isArray(data?.article_links) ? data.article_links : [];
-
       if (!links.length) {
-        renderEmpty("No articles found", "This page doesn't have article links to analyze.");
+        renderEmpty("No articles found", "This page doesn't have article links.");
         return;
       }
-
       const items = links.slice(0, MAX_CARDS).map((item) => ({
         id: crypto.randomUUID(),
         url: item.url,
         title: item.title || item.url,
         imageUrl: item.image_url || ""
       }));
-
-      // Render cards
       clearBody();
-      const cards = items.map(item => {
+      items.forEach((item) => {
         const card = buildCard(item);
-        card.dataset.itemId = item.id;
         if (sidebar.body) sidebar.body.appendChild(card);
-        return { item, card };
       });
-
-      if (sidebar.updateStats) sidebar.updateStats(null, items.length, 0);
-
-      // Request authenticity
-      const payload = {
-        items: items.map(item => ({
-          item_id: item.id,
-          url: item.url,
-          text: item.title,
-          check_depth: "standard"
-        })),
-        max_concurrent: 20
-      };
-
-      try {
-        const auth = await requestAuthenticity(payload);
-        const results = Array.isArray(auth?.results) ? auth.results : [];
-        const scores = new Map(results.map(r => [r.item_id, r.authenticity_score]));
-
-        let total = 0, count = 0, verified = 0;
-
-        cards.forEach(({ item, card }) => {
-          const score = scores.get(item.id);
-          updateCardBadge(card, score);
-          
-          if (typeof score === "number") {
-            total += score;
-            count++;
-            if (score >= 80) verified++;
-          }
-        });
-
-        const avg = count > 0 ? total / count : null;
-        if (sidebar.updateStats) sidebar.updateStats(avg, items.length, verified);
-      } catch (e) {
-        console.warn("Authenticity failed:", e);
-        cards.forEach(({ card }) => updateCardBadge(card, null));
-      }
     } catch (e) {
       console.error("Load failed:", e);
-      renderError("Failed to load content. Check if the backend is running.");
+      const msg = e?.message || "Load failed";
+      renderError(msg.includes("run_backend") ? msg : msg + " Start backend: run_backend.bat (port 8001).");
     }
   };
 
-  // Voice handlers
-  const setVoiceState = (state) => {
-    voiceState = state;
-    const btn = sidebar.voiceBtn;
-    if (!btn) return;
-
-    btn.classList.remove('il-voice-listening', 'il-voice-processing');
-    const mic = ICONS.mic || '';
-
-    if (state === 'listening') {
-      btn.classList.add('il-voice-listening');
-      btn.innerHTML = `<span class="il-voice-icon">${mic}</span><span>Listening...</span>`;
-      if (sidebar.updateVoiceStatus) sidebar.updateVoiceStatus("Speak now...");
-    } else if (state === 'processing') {
-      btn.classList.add('il-voice-processing');
-      btn.innerHTML = `<span class="il-voice-icon">${mic}</span><span>Processing...</span>`;
-    } else {
-      btn.innerHTML = `<span class="il-voice-icon">${mic}</span><span>Ask InterestLens</span>`;
-    }
-  };
-
-  const handleVoiceCommand = (cmd) => {
-    const c = cmd.toLowerCase();
-    if (sidebar.updateVoiceStatus) {
-      sidebar.updateVoiceStatus(`Heard: "${cmd}"`);
-    }
-  };
-
-  const startVoice = () => {
-    if (voiceState !== 'idle') {
-      if (recognition) {
-        try { recognition.stop(); } catch (e) {}
-      }
-      setVoiceState('idle');
-      return;
-    }
-
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      if (sidebar.updateVoiceStatus) sidebar.updateVoiceStatus("Voice not supported in this browser");
-      return;
-    }
-
-    setVoiceState('listening');
-
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    recognition = new SR();
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US';
-
-    recognition.onresult = (e) => {
-      const cmd = e.results[0][0].transcript;
-      setVoiceState('processing');
-      setTimeout(() => {
-        handleVoiceCommand(cmd);
-        setVoiceState('idle');
-      }, 500);
-    };
-
-    recognition.onerror = (e) => {
-      if (sidebar.updateVoiceStatus) sidebar.updateVoiceStatus(`Error: ${e.error}`);
-      setVoiceState('idle');
-    };
-
-    recognition.onend = () => {
-      if (voiceState === 'listening') setVoiceState('idle');
-    };
-
-    try {
-      recognition.start();
-    } catch (e) {
-      if (sidebar.updateVoiceStatus) sidebar.updateVoiceStatus("Could not start voice");
-      setVoiceState('idle');
-    }
-  };
-
-  // Attach event listeners safely
   if (sidebar.refreshBtn) {
     sidebar.refreshBtn.onclick = () => loadCards(true);
   }
-
-  if (sidebar.voiceBtn) {
-    sidebar.voiceBtn.onclick = startVoice;
+  if (sidebar.automateRunBtn) {
+    sidebar.automateRunBtn.onclick = () => runAutomation();
+  }
+  if (sidebar.automateVoiceBtn) {
+    sidebar.automateVoiceBtn.onclick = () => setAutomateStatus("Voice coming soon.");
+  }
+  if (sidebar.automateInput) {
+    sidebar.automateInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") runAutomation();
+    });
   }
 
-  // Listen for messages
   try {
-    chrome.runtime.onMessage.addListener((msg, sender, respond) => {
+    chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
       if (msg?.type === "interestlens:toggle-sidebar") {
         if (sidebar.toggle) sidebar.toggle();
         respond({ ok: true });
@@ -332,6 +247,5 @@
     console.warn("Could not add message listener:", e);
   }
 
-  // Initial load
   loadCards();
 })();
