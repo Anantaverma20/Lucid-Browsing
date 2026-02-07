@@ -1,1 +1,1 @@
-# Browserbase: scraper and API components for InterestLens.
+# Browserbase: scraper and API components for Lucid Browsing.

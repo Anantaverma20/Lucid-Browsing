@@ -1,7 +1,7 @@
 (() => {
   const sidebar = window.__interestLensSidebar;
   if (!sidebar) {
-    console.log("InterestLens: Waiting for sidebar...");
+    console.log("Lucid Browsing: Waiting for sidebar...");
     return;
   }
   if (sidebar._initialized) return;
@@ -226,8 +226,56 @@
   if (sidebar.automateRunBtn) {
     sidebar.automateRunBtn.onclick = () => runAutomation();
   }
+  const voiceRecording = { active: false, recorder: null, chunks: [] };
   if (sidebar.automateVoiceBtn) {
-    sidebar.automateVoiceBtn.onclick = () => setAutomateStatus("Voice coming soon.");
+    sidebar.automateVoiceBtn.onclick = async () => {
+      if (voiceRecording.active) {
+        if (voiceRecording.recorder && voiceRecording.recorder.state !== "inactive") {
+          voiceRecording.recorder.stop();
+        }
+        voiceRecording.active = false;
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        voiceRecording.chunks = [];
+        voiceRecording.recorder = new MediaRecorder(stream);
+        voiceRecording.recorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) voiceRecording.chunks.push(e.data);
+        };
+        voiceRecording.recorder.onstop = async () => {
+          stream.getTracks().forEach((t) => t.stop());
+          const blob = new Blob(voiceRecording.chunks, { type: "audio/webm" });
+          setAutomateStatus("Processing...");
+          const buf = await blob.arrayBuffer();
+          chrome.runtime.sendMessage(
+            { type: "interestlens:voice-transcribe", audio: buf, filename: "audio.webm" },
+            (response) => {
+              if (chrome.runtime.lastError) {
+                setAutomateStatus(normalizeExtensionError(chrome.runtime.lastError.message), true);
+                return;
+              }
+              if (!response || !response.ok) {
+                setAutomateStatus(response?.detail || response?.error || "Transcription failed", true);
+                return;
+              }
+              const text = (response.text != null ? String(response.text) : "").trim();
+              if (sidebar.automateInput) {
+                sidebar.automateInput.value = text;
+                setAutomateStatus(text ? "Ready. Click Run or press Enter." : "No speech detected.");
+              } else {
+                setAutomateStatus(text ? "Transcribed." : "No speech detected.");
+              }
+            }
+          );
+        };
+        voiceRecording.recorder.start();
+        voiceRecording.active = true;
+        setAutomateStatus("Listening... Click mic again to stop.");
+      } catch (e) {
+        setAutomateStatus(e?.message || "Microphone access denied.", true);
+      }
+    };
   }
   if (sidebar.automateInput) {
     sidebar.automateInput.addEventListener("keydown", (e) => {

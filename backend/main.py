@@ -1,5 +1,5 @@
 """
-Single FastAPI app for InterestLens: automate, scrape, health.
+Single FastAPI app for Lucid Browsing: automate, scrape, health.
 Scraper API uses port 8000; run this backend on 8001:
   uvicorn backend.main:app --host 127.0.0.1 --port 8001
 """
@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.routes import automate, scrape
+from backend.routes import automate, scrape, voice
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,7 @@ if not _backend_log.handlers:
     _backend_log.addHandler(_h)
 
 app = FastAPI(
-    title="InterestLens API",
+    title="Lucid Browsing API",
     description="Automation agent pipeline and scraping",
     version="1.0.0",
 )
@@ -57,12 +57,13 @@ app.add_middleware(
 
 app.include_router(automate.router)
 app.include_router(scrape.router)
+app.include_router(voice.router)
 
 
 @app.get("/")
 async def root():
     return {
-        "message": "InterestLens API",
+        "message": "Lucid Browsing API",
         "endpoints": {
             "POST /automate": "Run automation pipeline (body: url, command)",
             "POST /scrape": "Scrape URL (body: url, refresh_cache?)",

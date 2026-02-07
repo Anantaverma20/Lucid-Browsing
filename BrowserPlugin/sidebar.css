@@ -1,5 +1,5 @@
 /* ============================================
-   InterestLens Sidebar - Modern UI with Light/Dark Mode
+   Lucid Browsing Sidebar - Modern UI with Light/Dark Mode
    ============================================ */
 
 /* CSS Custom Properties for Theming */
@@ -199,6 +199,12 @@
   width: 18px;
   height: 18px;
   color: white;
+}
+.il-logo-img {
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+  border-radius: var(--il-radius-md);
 }
 
 .il-title {

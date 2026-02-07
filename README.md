@@ -1,1 +1,1 @@
-# InterestLens
+# Lucid Browsing

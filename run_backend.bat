@@ -1,5 +1,5 @@
 @echo off
-REM Start InterestLens backend on port 8001 (scraper API stays on 8000)
+REM Start Lucid Browsing backend on port 8001 (scraper API stays on 8000)
 cd /d "%~dp0"
 echo Starting backend on http://127.0.0.1:8001 ...
 echo Press Ctrl+C to stop.

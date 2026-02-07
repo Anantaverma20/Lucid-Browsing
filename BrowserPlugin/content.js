@@ -117,8 +117,8 @@
   const header = document.createElement("div");
   header.className = "il-header";
   header.innerHTML = `
-    <div class="il-logo">${ICONS.eye}</div>
-    <div class="il-title">InterestLens</div>
+    <div class="il-logo"><img src="${chrome.runtime.getURL("icons/icon48.png")}" alt="" class="il-logo-img" /></div>
+    <div class="il-title">Lucid Browsing</div>
     <div class="il-header-actions">
       <button class="il-btn" id="il-refresh-btn" type="button" aria-label="Refresh">${ICONS.refresh}</button>
     </div>

@@ -1,4 +1,4 @@
-# InterestLens Web Scraper
+# Lucid Browsing Web Scraper
 
 A web scraping service that uses Browserbase to extract structured information from websites. Extracts article links, images, titles, and content while removing ads. Results are cached in Redis.
 
@@ -162,7 +162,7 @@ curl "http://localhost:8000/"
 ## Project Structure
 
 ```
-InterestLens/
+Lucid Browsing/
 ├── .env                 # Environment variables
 ├── requirements.txt     # Python dependencies
 ├── scraper.py          # Main scraper class and CLI

@@ -15,3 +15,6 @@ playwright>=1.40.0
 
 # Optional: Composio "Bridge" for Gmail, Notion, Calendar, Linear/Jira, etc. (set COMPOSIO_API_KEY to enable)
 composio-gemini>=0.8.0
+
+# Voice transcription (extension mic button) – set OPENAI_API_KEY to enable
+openai>=1.0.0

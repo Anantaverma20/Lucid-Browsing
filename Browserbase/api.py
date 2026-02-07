@@ -17,7 +17,7 @@ from .scraper import WebScraper
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 app = FastAPI(
-    title="InterestLens Web Scraper",
+    title="Lucid Browsing Web Scraper",
     description="Scrape websites using Browserbase and extract article links, images, titles, and content",
     version="1.0.0"
 )
@@ -93,7 +93,7 @@ def validate_and_format_result(result: dict, url: str) -> dict:
 async def root():
     """Root endpoint with API information."""
     return {
-        "message": "InterestLens Web Scraper API",
+        "message": "Lucid Browsing Web Scraper API",
         "endpoints": {
             "POST /scrape": "Scrape a URL and get structured data",
             "GET /scrape": "Scrape a URL via GET request (query parameter: ?url=...)",

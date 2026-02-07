@@ -23,9 +23,10 @@ DEFAULT_COMPOSIO_TOOLS = [
     "GOOGLESHEETS_CREATE_GOOGLE_SHEET",
     "GOOGLESHEETS_ADD_ROW",
     "GOOGLESHEETS_APPEND_DATA",
-    # Google Docs: create document; use CREATE_DOCUMENT_MARKDOWN for full body (profile + post summary)
-    "GOOGLEDOCS_CREATE_DOCUMENT",
+    # Google Docs: search existing, insert into existing, or create new with content
+    "GOOGLEDOCS_SEARCH_DOCUMENTS",
     "GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN",
+    "GOOGLEDOCS_INSERT_TEXT_ACTION",
     # Google Calendar: create, update, delete events
     "GOOGLECALENDAR_CREATE_EVENT",
     "GOOGLECALENDAR_UPDATE_EVENT",
@@ -102,6 +103,8 @@ Task spec: {task_spec}
 Page URL: {url}
 Relevant page structure and text: {page_context[:4000]}
 
+EXTRACT FROM THE PAGE ABOVE: When the user asks for a "summary of this post" or to save content from the current page, you MUST read the "Relevant page structure and text" (and Task spec) above and extract the actual post/content. Then write a real summary: 2–4 sentences that describe what the post says (main point, key info). Do NOT write a generic phrase like "Summary of Waymo post." or "Summary of this post."—the doc must contain the actual extracted and summarized content from the page. If the page context includes post text, author, or company name, use that to build the summary.
+
 STRICT RULE — ONLY ACT WHEN EXPLICITLY ASKED: Use Composio tools ONLY when the user clearly and specifically asks for an external app action, e.g.: "draft an email", "send an email", "save to Google Sheet", "add to calendar", "create a doc", "save to Notion". Do NOT draft emails, create docs, or take any Composio action unless the user explicitly requested it. Do NOT infer or proactively do things like drafting an email "to document" or "to summarize" the user's request—that is forbidden. If the user only asked to remove elements, change the page, hide UI, or do something on the current webpage, do NOT call any tools; respond with exactly: "Not a Composio action; the browser automation will handle this."
 
 SCOPE: Composio only handles external app actions (Gmail, Sheets, Docs, Calendar, Notion). Do NOT handle requests about changing the webpage itself—e.g. removing elements on the page, hiding UI, modifying the DOM, "remove elements on YouTube", hiding ads/sidebars. Those are handled by the browser automation, not by Composio. If the user's request is only about modifying the current page, respond with exactly: "Not a Composio action; the browser automation will handle this." Do not call any tools.
@@ -110,13 +113,14 @@ CRITICAL: When the user explicitly asks to "save to Google Sheet" (or save post/
 
 **Naming:** For new sheets, docs, or drafts use clear titles from the content (e.g. "Jia Chen - LinkedIn", "Mark M - Profile").
 
-**Gmail:** Use GMAIL_CREATE_EMAIL_DRAFT or GMAIL_SEND_EMAIL with subject and body from context.
+**Gmail (draft email):** Use GMAIL_CREATE_EMAIL_DRAFT. You MUST write a full, substantive email body—not a skeleton. For application emails (e.g. AI engineer, role at a company): (1) Extract from the page context: recipient name, company name, role, and if visible the user's profile (headline, e.g. "Data Scientist & AI/ML Engineer | LLM Development"). (2) Write a complete professional email: greeting (Dear [Name],), brief intro stating interest in the role/company, 1–2 paragraphs on why you're a fit (mention relevant qualifications: ML, LLM, AI/ML engineering, etc. from the user's context or infer "AI/ML experience"), something specific about the company if visible, and a closing (e.g. eager to discuss, thank you, sincerely). Subject line should be specific (e.g. "AI Engineer Opportunity at [Company]" or "Application – AI Engineer Role"). Do NOT output only "Dear [Name]," and "Add recipient email..."—that is forbidden. The body must read like a real application email. If no email address is in context, use recipient_email "recipient@example.com" and add one line at the very end: "Add recipient email in To field before sending."
 
 **Google Sheets:** For "save to Google Sheet" you MUST use GOOGLESHEETS_CREATE_GOOGLE_SHEET (title from person/source) then GOOGLESHEETS_ADD_ROW or GOOGLESHEETS_APPEND_DATA with the extracted data. Put each field (name, title, post summary, profile info) in appropriate columns.
 
-**Google Docs (profile and post summary):** Prefer GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN so you can pass the full document body in one call (title + markdown content). If not available, use GOOGLEDOCS_CREATE_DOCUMENT for title only. The document body MUST be complete—no truncated sentences, no cut-off headline or post text.
-- **Profile section:** Full name, full headline (do not cut off with "..." or mid-word), profile viewers, post impressions, and any other visible stats. Use clear labels: "Name:", "Headline:", "Profile viewers:", "Post impressions:".
-- **Post summary:** Write a proper 2–4 sentence summary of each post in your own words. Describe what the post is about and its main point. BAD (forbidden): "Post Summary: We just won 1st place at Hack the Stackathon 🏆 On" (incomplete). GOOD: "Post Summary: Mark Morgan shared that his team won first place at Hack the Stackathon. The post celebrates this achievement and goes on to describe the event or next steps." Never end the summary mid-sentence. If the source post was truncated ("...more"), write a complete summary of the visible part and add "(Summary based on visible portion.)" at the end of that paragraph.
+**Google Docs — existing doc vs new doc:**
+- **If the user names an existing document** (e.g. "save the summary to the google doc named 'post summary'", "add to my doc 'Post Summary'", "save to existing doc 'X'"): do NOT create a new doc. Use GOOGLEDOCS_SEARCH_DOCUMENTS to find the document by title/name (e.g. query or title matching the name the user said). From the search result get the document ID, then use GOOGLEDOCS_INSERT_TEXT_ACTION with that documentId and the summary text (extracted from the page as below) to append to the existing doc. You may need two tool calls: first search, then insert.
+- **If the user does NOT specify an existing doc name:** create a new doc with GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN (title + markdown with the summary). Do not use GOOGLEDOCS_CREATE_DOCUMENT (it creates an empty doc).
+- **Extract from page:** For any summary, read the "Relevant page structure and text" and "Task spec" above, find the actual post content, and write a real 2–4 sentence summary. No generic "Summary of X post." Put that extracted summary in the doc (either as the markdown for a new doc or as the text for INSERT_TEXT_ACTION).
 
 **Google Calendar:** Use GOOGLECALENDAR_CREATE_EVENT or GOOGLECALENDAR_QUICK_ADD; for delete use GOOGLECALENDAR_DELETE_EVENT.
 
@@ -124,7 +128,7 @@ CRITICAL: When the user explicitly asks to "save to Google Sheet" (or save post/
 
 If the user did not explicitly ask for an email, sheet, doc, calendar event, or Notion page, do NOT call any tools. If they did ask but you do not have the right tool connected, say briefly that the app is not connected. Only call tools when the user clearly requested one of these external actions.
 
-When creating a Google Doc for "summary of this post and profile info": use GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN with a title (e.g. "Mark Morgan - Profile and Post Summary") and a markdown body that contains (1) full profile section with complete headline and all stats, (2) a Post Summary paragraph of 2–4 complete sentences that explain what the post says—never a snippet that ends mid-sentence. The entire body must be complete and readable."""
+When saving a summary to a Google Doc: (1) Extract the post from the page context and write a real 2–4 sentence summary. (2) If the user named an existing doc (e.g. "doc named 'post summary'"), use GOOGLEDOCS_SEARCH_DOCUMENTS to find it, then GOOGLEDOCS_INSERT_TEXT_ACTION to append the summary. (3) If no existing doc was named, use GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN with title and markdown. When drafting an application email (e.g. AI engineer): write a full email body with intro, qualifications, company interest, and closing—never just a greeting and a placeholder line."""
 
     # Gemini SDK expects list of genai Tool; Composio returns GeminiTool wrappers with ._genai_tool
     tools_for_config = [getattr(t, "_genai_tool", t) for t in tools] if tools else []

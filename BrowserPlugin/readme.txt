@@ -1,4 +1,4 @@
-InterestLens Chrome Extension
+Lucid Browsing Chrome Extension
 =============================
 
 A modern AI-powered content authenticity checker with voice interaction.
@@ -25,7 +25,7 @@ KEYBOARD SHORTCUTS:
 
 VOICE COMMANDS:
 ---------------
-Click the "Ask InterestLens" button and say:
+Click the "Ask Lucid Browsing" button and say:
 - "Hide distractions" - Removes ads and distracting elements
 - "Show distractions" / "Restore" - Brings back hidden elements
 - "Show me [topic] content" - Highlights content about a specific topic

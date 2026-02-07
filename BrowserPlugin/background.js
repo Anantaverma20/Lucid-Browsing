@@ -148,7 +148,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             world: "ISOLATED",
             func: () => {
               const toast = document.createElement("div");
-              toast.textContent = "InterestLens: script ran";
+              toast.textContent = "Lucid Browsing: script ran";
               toast.style.cssText = "position:fixed;bottom:16px;right:16px;z-index:2147483647;padding:8px 14px;background:#6366f1;color:#fff;border-radius:8px;font-family:system-ui,sans-serif;font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,0.2);";
               document.body.appendChild(toast);
               setTimeout(() => toast.remove(), 2500);
@@ -175,6 +175,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       });
 
+    return true;
+  }
+
+  // Voice transcription: extension sends recorded audio (ArrayBuffer), backend uses Whisper
+  if (message?.type === "interestlens:voice-transcribe") {
+    const audio = message.audio;
+    const filename = message.filename || "audio.webm";
+    if (!audio || !(audio instanceof ArrayBuffer)) {
+      sendResponse({ ok: false, error: "Missing audio", detail: "Send an ArrayBuffer as message.audio." });
+      return true;
+    }
+    const blob = new Blob([audio], { type: "audio/webm" });
+    const form = new FormData();
+    form.append("audio", blob, filename);
+    fetch(`${API_BASE}/voice/transcribe`, {
+      method: "POST",
+      body: form
+    })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          sendResponse({
+            ok: false,
+            error: data.error || "Transcription failed",
+            detail: data.detail || (response.status === 503 ? "OPENAI_API_KEY not set or openai not installed." : `Request failed (${response.status}).`)
+          });
+          return;
+        }
+        sendResponse({ ok: true, text: data.text != null ? String(data.text) : "" });
+      })
+      .catch((error) => {
+        const msg = (error?.message || "").toLowerCase();
+        const detail = msg.includes("fetch") || msg.includes("network") || msg.includes("failed")
+          ? "Cannot reach backend on port 8001. Start it: run run_backend.bat in project folder."
+          : (error?.message || "Request failed");
+        sendResponse({ ok: false, error: "Backend unreachable", detail });
+      });
     return true;
   }
 

@@ -1,8 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "InterestLens",
+  "name": "Lucid Browsing",
   "version": "2.0.0",
   "description": "Scrape pages and view article links via the Browserbase API.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "permissions": [
     "scripting",
     "tabs",
@@ -31,7 +36,7 @@
         "default": "Ctrl+Shift+S",
         "mac": "Command+Shift+S"
       },
-      "description": "Toggle InterestLens sidebar"
+      "description": "Toggle Lucid Browsing sidebar"
     }
   },
   "web_accessible_resources": [
