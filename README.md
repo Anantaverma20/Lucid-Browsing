@@ -86,9 +86,9 @@ A Chrome extension that helps you browse with clarity: scrape and score article 
 |----------|---------|
 | `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID` | Scraping (Browserbase) |
 | `GOOGLE_API_KEY` | Automation agent (Gemini) |
-| `OPENAI_API_KEY` | Optional: ad removal + **voice transcription (Whisper)** |
-| `COMPOSIO_API_KEY`, `COMPOSIO_ENTITY_ID` | Optional: Gmail, Docs, Notion, Calendar, etc. |
-| `REDIS_URL` | Optional: cache scrape results |
+| `OPENAI_API_KEY` | Optional:ad removal + **voice transcription (Whisper)** |
+| `COMPOSIO_API_KEY`, `COMPOSIO_ENTITY_ID` | Gmail, Docs, Notion, Calendar, etc. |
+| `REDIS_URL` | cache scrape results |
 
 Full list and comments are in `.env.example`. Do not commit `.env`.
 
