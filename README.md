@@ -90,6 +90,7 @@ A Chrome extension that helps you browse with clarity: scrape and score article 
 | `OPENAI_API_KEY` | Optional: ad removal + **voice transcription (Whisper fallback)** |
 | `COMPOSIO_API_KEY`, `COMPOSIO_ENTITY_ID` | Optional: Gmail, Docs, Notion, Calendar, etc. |
 | `REDIS_URL` | Optional: cache scrape results |
+| `BEM_API_KEY`, `TAVILY_API_KEY` | News Truth (Verify Truth / fact-check) |
 
 Full list and comments are in `.env.example`. Do not commit `.env`.
 
