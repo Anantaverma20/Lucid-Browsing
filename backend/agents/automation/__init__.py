@@ -1,1 +1,1 @@
-# Automation agent pipeline: planner, writer, validator, executor, checker, loop
+# Automation agent pipeline: planner, writer, validator, checker, loop (script runs in user's browser via extension)

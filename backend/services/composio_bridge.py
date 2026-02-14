@@ -78,6 +78,7 @@ def run_connector_step(
     page_context: str,
     url: str,
     *,
+    main_content: str | None = None,
     model: str = "gemini-2.0-flash",
 ) -> dict[str, Any]:
     """
@@ -98,12 +99,15 @@ def run_connector_step(
         logger.warning("[Composio] No tools available for entity_id=%s (check connected apps in Composio dashboard)", entity_id)
         return {"summary": "No Composio tools available.", "tool_calls": [], "error": None}
 
+    main_block = ""
+    if main_content and main_content.strip():
+        main_block = f"\n\nMain content (full text from the page — use this for summaries):\n{main_content[:6000]}\n"
     prompt = f"""You are an executive assistant with access to Composio tools. The user is on a webpage and said: "{user_command}".
 Task spec: {task_spec}
 Page URL: {url}
-Relevant page structure and text: {page_context[:4000]}
+Relevant page structure and text: {page_context[:4000]}{main_block}
 
-EXTRACT FROM THE PAGE ABOVE: When the user asks for a "summary of this post" or to save content from the current page, you MUST read the "Relevant page structure and text" (and Task spec) above and extract the actual post/content. Then write a real summary: 2–4 sentences that describe what the post says (main point, key info). Do NOT write a generic phrase like "Summary of Waymo post." or "Summary of this post."—the doc must contain the actual extracted and summarized content from the page. If the page context includes post text, author, or company name, use that to build the summary.
+EXTRACT FROM THE PAGE ABOVE: When the user asks for a "summary of this post", "caption text", or to save content to Google Docs, use the "Main content" section above if present. Write a real summary (or use the caption as-is). Only if there is no main content use a short placeholder. You MUST call a Composio tool when they ask to save to Docs: if they did not name a specific doc, call GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN now—do not ask "should I create a new one?" or reply with text only. If they named an existing doc, call GOOGLEDOCS_SEARCH_DOCUMENTS then GOOGLEDOCS_INSERT_TEXT_ACTION. Never refuse to call tools; always create or update the doc so the user gets something they can edit.
 
 STRICT RULE — ONLY ACT WHEN EXPLICITLY ASKED: Use Composio tools ONLY when the user clearly and specifically asks for an external app action, e.g.: "draft an email", "send an email", "save to Google Sheet", "add to calendar", "create a doc", "save to Notion". Do NOT draft emails, create docs, or take any Composio action unless the user explicitly requested it. Do NOT infer or proactively do things like drafting an email "to document" or "to summarize" the user's request—that is forbidden. If the user only asked to remove elements, change the page, hide UI, or do something on the current webpage, do NOT call any tools; respond with exactly: "Not a Composio action; the browser automation will handle this."
 
@@ -119,8 +123,8 @@ CRITICAL: When the user explicitly asks to "save to Google Sheet" (or save post/
 
 **Google Docs — existing doc vs new doc:**
 - **If the user names an existing document** (e.g. "save the summary to the google doc named 'post summary'", "add to my doc 'Post Summary'", "save to existing doc 'X'"): do NOT create a new doc. Use GOOGLEDOCS_SEARCH_DOCUMENTS to find the document by title/name (e.g. query or title matching the name the user said). From the search result get the document ID, then use GOOGLEDOCS_INSERT_TEXT_ACTION with that documentId and the summary text (extracted from the page as below) to append to the existing doc. You may need two tool calls: first search, then insert.
-- **If the user does NOT specify an existing doc name:** create a new doc with GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN (title + markdown with the summary). Do not use GOOGLEDOCS_CREATE_DOCUMENT (it creates an empty doc).
-- **Extract from page:** For any summary, read the "Relevant page structure and text" and "Task spec" above, find the actual post content, and write a real 2–4 sentence summary. No generic "Summary of X post." Put that extracted summary in the doc (either as the markdown for a new doc or as the text for INSERT_TEXT_ACTION).
+- **If the user does NOT specify an existing doc name:** create a new doc with GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN (title + markdown with the summary). Do not use GOOGLEDOCS_CREATE_DOCUMENT (it creates an empty doc). NEVER ask "should I create a new one?" or "which doc?"—if they said "save to my google docs" or "save to google doc" without a doc name, immediately call GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN. Do not respond with text only; you MUST call the tool.
+- **Extract from page:** For any summary, use the "Main content (full text from the page)" section above when present; otherwise read "Relevant page structure and text" and "Task spec". Write a real 2–4 sentence summary (or use the caption/post text as-is if the user asked for "caption text"). No generic "Summary of X post." Put that extracted summary in the doc (either as the markdown for a new doc or as the text for INSERT_TEXT_ACTION).
 
 **Google Calendar:** Use GOOGLECALENDAR_CREATE_EVENT or GOOGLECALENDAR_QUICK_ADD; for delete use GOOGLECALENDAR_DELETE_EVENT.
 
@@ -128,7 +132,7 @@ CRITICAL: When the user explicitly asks to "save to Google Sheet" (or save post/
 
 If the user did not explicitly ask for an email, sheet, doc, calendar event, or Notion page, do NOT call any tools. If they did ask but you do not have the right tool connected, say briefly that the app is not connected. Only call tools when the user clearly requested one of these external actions.
 
-When saving a summary to a Google Doc: (1) Extract the post from the page context and write a real 2–4 sentence summary. (2) If the user named an existing doc (e.g. "doc named 'post summary'"), use GOOGLEDOCS_SEARCH_DOCUMENTS to find it, then GOOGLEDOCS_INSERT_TEXT_ACTION to append the summary. (3) If no existing doc was named, use GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN with title and markdown. When drafting an application email (e.g. AI engineer): write a full email body with intro, qualifications, company interest, and closing—never just a greeting and a placeholder line."""
+When saving a summary or caption to a Google Doc: (1) When "Main content" is provided, use it—summarize into 2–4 sentences, or if the user asked for "caption text" use the main content as the body. Otherwise extract from page structure; only if content is missing use a one-line placeholder. (2) You MUST call the tools—never reply with only text or ask "should I create a new one?". If the user named an existing doc, call GOOGLEDOCS_SEARCH_DOCUMENTS then GOOGLEDOCS_INSERT_TEXT_ACTION. (3) If no existing doc was named (e.g. "save to my google docs", "save to google doc"), call GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN immediately with a title like "Venkat - LinkedIn post" and the markdown content. Do NOT ask for clarification; just create the doc. When drafting an application email (e.g. AI engineer): write a full email body with intro, qualifications, company interest, and closing—never just a greeting and a placeholder line."""
 
     # Gemini SDK expects list of genai Tool; Composio returns GeminiTool wrappers with ._genai_tool
     tools_for_config = [getattr(t, "_genai_tool", t) for t in tools] if tools else []
@@ -151,8 +155,8 @@ When saving a summary to a Google Doc: (1) Extract the post from the page contex
             for p in parts:
                 if getattr(p, "text", None) and p.text:
                     summary_parts.append(p.text)
-                if getattr(p, "function_call", None):
-                    fc = p.function_call
+                fc = getattr(p, "function_call", None) or getattr(p, "functionCall", None)
+                if fc:
                     round_calls.append({
                         "name": getattr(fc, "name", None) or "",
                         "args": getattr(fc, "args", None) or {},
@@ -184,8 +188,95 @@ When saving a summary to a Google Doc: (1) Extract the post from the page contex
 
     summary = " ".join(summary_parts).strip() or "Connector step completed."
     logger.info("[Composio] connector step done tool_calls=%d summary_len=%d", len(tool_calls_done), len(summary))
+    if len(tool_calls_done) == 0 and any(kw in (user_command or "").lower() for kw in ("save", "doc", "google", "gmail", "sheet", "calendar", "notion")):
+        logger.warning("[Composio] model returned 0 tool_calls despite app-related command; summary may indicate missing extraction—check prompt/page_context")
     return {
         "summary": summary,
         "tool_calls": tool_calls_done,
         "error": None,
     }
+
+
+def run_connector_step_with_conversation(
+    entity_id: str,
+    conversation: list[dict],
+    latest_user_message: str,
+    page_context: str,
+    url: str,
+    *,
+    main_content: str | None = None,
+    model: str = "gemini-2.0-flash",
+) -> dict[str, Any]:
+    """
+    Run Composio with conversation history (chatbot follow-up). The user has replied to the
+    assistant's previous message; use their reply to complete the action (e.g. create new doc,
+    or add to existing doc). Returns same shape as run_connector_step.
+    """
+    logger.info("[Composio] run_connector_step_with_conversation entity_id=%s conv_len=%d latest=%r", entity_id, len(conversation), (latest_user_message or "")[:60])
+    _ensure_composio()
+    from google.genai import types
+
+    tools = get_composio_tools(entity_id)
+    if not tools:
+        return {"summary": "No Composio tools available.", "tool_calls": [], "error": None}
+
+    main_block = ""
+    if main_content and main_content.strip():
+        main_block = f"\n\nMain content (use for doc/sheet body):\n{main_content[:6000]}\n"
+
+    conv_text = "\n".join(
+        f"{m.get('role', 'user').capitalize()}: {m.get('content', '')}" for m in conversation
+    )
+    prompt = f"""You are an executive assistant with access to Composio tools. This is a follow-up in a conversation.
+
+Conversation so far:
+{conv_text}
+
+User's latest reply: "{latest_user_message}"
+
+Page URL: {url}
+Relevant page structure: {page_context[:3000]}{main_block}
+
+Use the user's latest reply to complete the action. For example: if they said "create a new one" or "yes, create one", call GOOGLEDOCS_CREATE_DOCUMENT_MARKDOWN with the main content above. If they gave a doc name, use GOOGLEDOCS_SEARCH_DOCUMENTS to find it then GOOGLEDOCS_INSERT_TEXT_ACTION. Do NOT ask more questions—perform the tool call now. Call the appropriate Composio tool (Google Docs, Sheets, Gmail, Calendar, Notion) based on what was discussed."""
+
+    tools_for_config = [getattr(t, "_genai_tool", t) for t in tools] if tools else []
+    if not tools_for_config:
+        tools_for_config = tools
+    config = types.GenerateContentConfig(tools=tools_for_config)
+    chat = _GENAI_CLIENT.chats.create(model=model, config=config)
+    summary_parts = []
+    tool_calls_done: list[dict] = []
+    max_tool_rounds = 3
+
+    try:
+        response = chat.send_message(prompt)
+        for _round in range(max_tool_rounds):
+            if not response or not getattr(response, "candidates", None) or not response.candidates:
+                break
+            cand = response.candidates[0]
+            parts = getattr(cand, "content", None) and getattr(cand.content, "parts", None) or []
+            round_calls: list[dict] = []
+            for p in parts:
+                if getattr(p, "text", None) and p.text:
+                    summary_parts.append(p.text)
+                fc = getattr(p, "function_call", None) or getattr(p, "functionCall", None)
+                if fc:
+                    round_calls.append({
+                        "name": getattr(fc, "name", None) or "",
+                        "args": getattr(fc, "args", None) or {},
+                    })
+            if not round_calls:
+                break
+            tool_calls_done.extend(round_calls)
+            logger.info("[Composio] follow-up tool_calls (round %s): %s", _round + 1, round_calls)
+            function_responses, executed = _COMPOSIO_CLIENT.provider.handle_response(response, tools)
+            if not executed or not function_responses:
+                break
+            summary_parts.append(str(function_responses)[:500])
+            response = chat.send_message(function_responses)
+    except Exception as e:
+        logger.exception("[Composio] connector step with conversation failed: %s", e)
+        return {"summary": "", "tool_calls": tool_calls_done, "error": str(e)[:400]}
+
+    summary = " ".join(summary_parts).strip() or "Done."
+    return {"summary": summary, "tool_calls": tool_calls_done, "error": None}

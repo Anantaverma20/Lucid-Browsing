@@ -12,6 +12,7 @@ from google.adk.events import Event, EventActions
 
 from backend import config
 from backend.services.daytona_sandbox import DAYTONA_INFRA_ERROR_PREFIX, run_automation_script
+from backend.services.script_utils import strip_trailing_prose
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,8 @@ class ValidatorAgent(BaseAgent):
     """Runs the automation script in sandbox (parse-only) and sets validation_ok / validation_errors in state."""
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
-        script = ctx.session.state.get("automation_script") or ""
+        raw_script = ctx.session.state.get("automation_script") or ""
+        script = strip_trailing_prose(raw_script)
         if not script:
             logger.info("[Validator] SKIP: no automation_script in state (Writer did not produce script)")
             ctx.session.state["validation_ok"] = False
@@ -60,6 +62,7 @@ class ValidatorAgent(BaseAgent):
                 state_delta={
                     "validation_ok": result.success,
                     "validation_errors": ctx.session.state["validation_errors"],
+                    "automation_script": script,
                 }
             ),
         )

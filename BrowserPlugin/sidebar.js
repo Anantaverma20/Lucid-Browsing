@@ -103,67 +103,227 @@
     });
   };
 
-  // Capture page structure (DOM summary) from the actual tab the user sees.
-  // Logic adapted from backend/services/headless_browser.py _DOM_SUMMARY_SCRIPT.
-  const getPageContext = () => {
-    const lines = [];
-    const maxLines = 150;
-    const textLen = 50;
-    const maxChars = 6000;
-    const seen = new Set();
-    const validClass = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
-    const validId = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
-    const add = (el) => {
-      if (lines.length >= maxLines || !el || seen.has(el)) return;
-      seen.add(el);
-      const id = el.id && validId.test(el.id) ? "#" + el.id : "";
-      let cls = "";
-      if (typeof el.className === "string" && el.className) {
-        const safe = el.className.trim().split(/\s+/).filter((c) => validClass.test(c)).slice(0, 3);
-        if (safe.length) cls = "." + safe.join(".");
-      }
-      const tag = el.tagName ? el.tagName.toLowerCase() : "?";
-      let text = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, textLen);
-      if (text) text = ' "' + text + '"';
-      lines.push(tag + id + cls + text);
-    };
-    try {
-      const semantic = 'section, article, aside, main, header, footer, nav, [role="region"], [role="complementary"], [role="main"], [role="banner"], [role="contentinfo"]';
-      const commonUI = '[class*="card"], [class*="widget"], [class*="item"], [class*="block"], [class*="box"], [class*="panel"], [class*="container"], [class*="section"], .sidebar, .side-bar, .feed-item, .promo, .banner, [data-testid], [data-component]';
-      const adsWeather = '[id*="ad"], [id*="Ad"], [class*="ad"], [class*="Ad"], [data-ad], .sponsored, [class*="sponsor"], [id*="banner"], [id*="weather"], [id*="Weather"], [class*="weather"], [class*="Weather"]';
-      const youtube = "ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer";
-      document.querySelectorAll([semantic, commonUI, adsWeather, youtube].join(", ")).forEach(add);
-      document.querySelectorAll("[id]").forEach(add);
-      let summary = lines.join("\n");
-      if (summary.length > maxChars) summary = summary.slice(0, maxChars - 3).trimEnd() + "...";
-      return summary;
-    } catch (e) {
-      return "Error: " + (e.message || String(e)).slice(0, 200);
-    }
-  };
-
-  const requestAutomate = (url, command) => {
+  const requestVerifyTruth = (includeScreenshot = false) => {
     return new Promise((resolve, reject) => {
       try {
-        const pageContext = getPageContext();
+        const { mainContent } = getPageContextAndMainContent("");
+        const url = window.location.href || "";
+        const content = (mainContent || "").trim().slice(0, 15000);
         chrome.runtime.sendMessage(
-          { type: "interestlens:automate", url, command, pageContext },
+          { type: "interestlens:verify-truth", url, content, includeScreenshot },
           (response) => {
             if (chrome.runtime.lastError) {
               reject(new Error(normalizeExtensionError(chrome.runtime.lastError.message)));
               return;
             }
-            if (!response) {
-              reject(new Error("No response"));
+            if (!response || !response.ok) {
+              reject(new Error(response?.detail || response?.error || "Verify failed"));
               return;
             }
-            if (response.ok) {
-              resolve(response);
-            } else if (response && !response.ok) {
-              reject(new Error(response.detail || response.error || "Automation failed"));
-            }
+            resolve(response.data);
           }
         );
+      } catch (e) {
+        reject(new Error(normalizeExtensionError(e?.message || "Request failed")));
+      }
+    });
+  };
+
+  const renderTruthReport = (data) => {
+    clearBody();
+    if (!sidebar.body) return;
+    const score = Math.round(Number(data.page_trust_score) || 0);
+    const claims = Array.isArray(data.claims) ? data.claims : [];
+    let band = "il-truth-mid";
+    if (score >= 70) band = "il-truth-high";
+    else if (score < 40) band = "il-truth-low";
+    const scoreLabel = score >= 70 ? "High trust" : score >= 40 ? "Mixed" : "Low trust / Misinformation";
+    let claimsHtml = claims
+      .map((c) => {
+        const verdict = (c.verdict || "Unverified").toString();
+        const claimEsc = (c.claim || "").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+        const explEsc = (c.explanation || "").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+        const src = c.source_url ? (c.source_url || "").replace(/</g, "&lt;") : "";
+        let icon = ICONS.alert;
+        if (verdict === "True") icon = ICONS.check;
+        else if (verdict === "False") icon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+        const linkPart = src ? `<a href="${src}" target="_blank" rel="noopener" class="il-truth-source">Source</a>` : "";
+        return `<div class="il-truth-claim il-truth-verdict-${verdict.toLowerCase()}">
+          <div class="il-truth-claim-icon">${icon}</div>
+          <div class="il-truth-claim-body">
+            <div class="il-truth-claim-text">${claimEsc}</div>
+            <div class="il-truth-claim-meta">${explEsc} ${linkPart}</div>
+          </div>
+        </div>`;
+      })
+      .join("");
+    if (!claimsHtml) claimsHtml = "<p class=\"il-truth-no-claims\">No testable claims extracted.</p>";
+    sidebar.body.innerHTML = `
+      <div class="il-truth-report">
+        <div class="il-truth-gauge-wrap ${band}">
+          <div class="il-truth-gauge" role="meter" aria-valuenow="${score}" aria-valuemin="0" aria-valuemax="100" aria-label="Page trust score">
+            <div class="il-truth-gauge-value">${score}</div>
+            <div class="il-truth-gauge-label">${scoreLabel}</div>
+          </div>
+        </div>
+        <div class="il-truth-claims">
+          <h3 class="il-truth-claims-title">Claim breakdown</h3>
+          ${claimsHtml}
+        </div>
+      </div>
+    `;
+  };
+
+  // Single DOM pass: page structure (for automation) + main post content (for summaries).
+  // Returns { pageContext, mainContent }. Logic adapted from headless_browser and previous getMainContentText.
+  const maxLines = 150;
+  const textLen = 50;
+  const maxChars = 6000;
+  const MAIN_CONTENT_MAX_CHARS = 4000;
+  const validClass = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
+  const validId = /^[a-zA-Z_][a-zA-Z0-9_-]*$/;
+
+  const isPostContainer = (el) => {
+    if (!el || !el.tagName) return false;
+    const tag = el.tagName.toLowerCase();
+    const cls = typeof el.className === "string" ? el.className : "";
+    const testId = el.getAttribute && el.getAttribute("data-testid");
+    return tag === "article" ||
+      cls.includes("feed-shared-update-v2") ||
+      testId === "feed-post-content" ||
+      testId === "tweet" ||
+      cls.includes("update-components-update-v2");
+  };
+
+  const getPageContextAndMainContent = (command) => {
+    const lines = [];
+    const blocks = [];
+    const linesSeen = new Set();
+    const blocksSeen = new Set();
+    const cmd = (command || "").trim();
+    const authorFromCommand = (() => {
+      const fromMatch = cmd.match(/(?:from|by)\s+([^.]+?)(?:\s+to\s|\.|$)/i);
+      if (fromMatch) return fromMatch[1].trim().replace(/\s+/g, " ");
+      return null;
+    })();
+
+    try {
+      const semantic = 'section, article, aside, main, header, footer, nav, [role="region"], [role="complementary"], [role="main"], [role="banner"], [role="contentinfo"]';
+      const commonUI = '[class*="card"], [class*="widget"], [class*="item"], [class*="block"], [class*="box"], [class*="panel"], [class*="container"], [class*="section"], .sidebar, .side-bar, .feed-item, .promo, .banner, [data-testid], [data-component]';
+      const adsWeather = '[id*="ad"], [id*="Ad"], [class*="ad"], [class*="Ad"], [data-ad], .sponsored, [class*="sponsor"], [id*="banner"], [id*="weather"], [id*="Weather"], [class*="weather"], [class*="Weather"]';
+      const youtube = "ytd-rich-item-renderer, ytd-video-renderer, ytd-compact-video-renderer, ytd-grid-video-renderer";
+      const postSelectors = ".feed-shared-update-v2, [data-testid='feed-post-content'], [data-testid='tweet'], .update-components-update-v2";
+      const combined = [semantic, commonUI, adsWeather, youtube, "[id]", postSelectors].join(", ");
+      const all = document.querySelectorAll(combined);
+
+      for (let i = 0; i < all.length; i++) {
+        const el = all[i];
+        if (!el) continue;
+        if (lines.length < maxLines && !linesSeen.has(el)) {
+          linesSeen.add(el);
+          const id = el.id && validId.test(el.id) ? "#" + el.id : "";
+          let cls = "";
+          if (typeof el.className === "string" && el.className) {
+            const safe = el.className.trim().split(/\s+/).filter((c) => validClass.test(c)).slice(0, 3);
+            if (safe.length) cls = "." + safe.join(".");
+          }
+          const tag = el.tagName ? el.tagName.toLowerCase() : "?";
+          let text = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim().slice(0, textLen);
+          if (text) text = ' "' + text + '"';
+          lines.push(tag + id + cls + text);
+        }
+        if (isPostContainer(el) && !blocksSeen.has(el)) {
+          const text = (el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+          if (text && text.length >= 30) {
+            blocksSeen.add(el);
+            const rect = el.getBoundingClientRect();
+            const centerY = rect.top + rect.height / 2;
+            const viewportCenter = window.innerHeight / 2;
+            const distanceFromCenter = Math.abs(centerY - viewportCenter);
+            const inView = rect.top < window.innerHeight && rect.bottom > 0;
+            blocks.push({
+              text: text.slice(0, MAIN_CONTENT_MAX_CHARS),
+              distanceFromCenter: inView ? distanceFromCenter : 1e9,
+              inView
+            });
+          }
+        }
+      }
+
+      let pageContext = lines.join("\n");
+      if (pageContext.length > maxChars) pageContext = pageContext.slice(0, maxChars - 3).trimEnd() + "...";
+
+      let mainContent = "";
+      if (blocks.length === 0) {
+        const main = document.querySelector("main");
+        if (main) {
+          const text = (main.innerText || main.textContent || "").replace(/\s+/g, " ").trim();
+          if (text && text.length >= 30) mainContent = text.slice(0, MAIN_CONTENT_MAX_CHARS);
+        }
+      } else {
+        let best = blocks[0];
+        if (authorFromCommand) {
+          const nameParts = authorFromCommand.split(/\s+/).filter((p) => p.length > 1);
+          const byAuthor = blocks.filter((b) => {
+            const t = b.text.toLowerCase();
+            return nameParts.some((part) => t.includes(part.toLowerCase()));
+          });
+          if (byAuthor.length) {
+            best = byAuthor.reduce((a, b) => (a.text.length >= b.text.length ? a : b));
+          } else {
+            const byView = blocks.filter((b) => b.inView).sort((a, b) => a.distanceFromCenter - b.distanceFromCenter);
+            if (byView.length) best = byView[0];
+          }
+        } else {
+          const inView = blocks.filter((b) => b.inView).sort((a, b) => a.distanceFromCenter - b.distanceFromCenter);
+          if (inView.length) best = inView[0];
+        }
+        mainContent = best.text;
+      }
+
+      return { pageContext, mainContent };
+    } catch (e) {
+      return { pageContext: "Error: " + (e.message || String(e)).slice(0, 200), mainContent: "" };
+    }
+  };
+
+  // In-memory conversation for Composio follow-up (list of { role: "user"|"assistant", content: string })
+  const chatMessagesList = [];
+
+  const appendMessage = (role, content) => {
+    const text = (content || "").trim();
+    if (!text) return;
+    chatMessagesList.push({ role, content: text });
+    const container = sidebar.chatMessages;
+    if (!container) return;
+    const bubble = document.createElement("div");
+    bubble.className = "il-chat-message il-chat-" + (role === "user" ? "user" : "assistant");
+    bubble.textContent = text;
+    container.appendChild(bubble);
+    container.scrollTop = container.scrollHeight;
+  };
+
+  const requestAutomate = (url, command, conversation = null) => {
+    return new Promise((resolve, reject) => {
+      try {
+        const { pageContext, mainContent } = getPageContextAndMainContent(command);
+        const payload = { type: "interestlens:automate", url, command, pageContext, mainContent };
+        if (Array.isArray(conversation) && conversation.length > 0) payload.conversation = conversation;
+        chrome.runtime.sendMessage(payload, (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(normalizeExtensionError(chrome.runtime.lastError.message)));
+            return;
+          }
+          if (!response) {
+            reject(new Error("No response"));
+            return;
+          }
+          if (response.ok) {
+            resolve(response);
+          } else if (response && !response.ok) {
+            reject(new Error(response.detail || response.error || "Automation failed"));
+          }
+        });
       } catch (e) {
         reject(new Error(normalizeExtensionError(e?.message || "Request failed")));
       }
@@ -183,12 +343,30 @@
       setAutomateStatus("Enter a command first.", true);
       return;
     }
+    if (input) input.value = "";
+    const isFollowUp = chatMessagesList.length >= 2;
+    if (isFollowUp) {
+      appendMessage("user", command);
+    }
     setAutomateStatus("Running...");
     try {
-      await requestAutomate(window.location.href, command);
-      setAutomateStatus("Script run on this page.");
-      if (input) input.value = "";
+      const conversation = isFollowUp ? chatMessagesList.slice(0, -1) : null;
+      const response = await requestAutomate(window.location.href, command, conversation);
+      const assistantText = (response.connector_summary && response.connector_summary.trim())
+        ? response.connector_summary.trim()
+        : (response.connector_error ? "Error: " + response.connector_error : "Script run on this page.");
+      if (!isFollowUp) {
+        appendMessage("user", command);
+      }
+      appendMessage("assistant", assistantText);
+      setAutomateStatus(chatMessagesList.length > 0 ? "" : "Script run on this page.");
     } catch (e) {
+      if (isFollowUp) {
+        chatMessagesList.pop();
+        if (sidebar.chatMessages && sidebar.chatMessages.lastElementChild?.classList.contains("il-chat-user")) {
+          sidebar.chatMessages.lastElementChild.remove();
+        }
+      }
       setAutomateStatus(e?.message || "Automation failed", true);
     }
   };
@@ -222,6 +400,23 @@
 
   if (sidebar.refreshBtn) {
     sidebar.refreshBtn.onclick = () => loadCards(true);
+  }
+  const runVerifyTruth = async (includeScreenshot) => {
+    renderLoading(includeScreenshot ? "Capturing screenshot and verifying..." : "Verifying truth...");
+    try {
+      const data = await requestVerifyTruth(includeScreenshot);
+      renderTruthReport(data);
+    } catch (e) {
+      const msg = e?.message || "Verify failed";
+      const hint = msg.includes("run_backend") || msg.includes("Restart the backend") ? "" : " Start backend: run_backend.bat (port 8001).";
+      renderError(msg + hint);
+    }
+  };
+  if (sidebar.verifyTruthBtn) {
+    sidebar.verifyTruthBtn.onclick = () => runVerifyTruth(false);
+  }
+  if (sidebar.verifyScreenshotBtn) {
+    sidebar.verifyScreenshotBtn.onclick = () => runVerifyTruth(true);
   }
   if (sidebar.automateRunBtn) {
     sidebar.automateRunBtn.onclick = () => runAutomation();

@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from backend.routes import automate, scrape, voice
+from backend.routes import automate, scrape, voice, verify
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ app.add_middleware(
 app.include_router(automate.router)
 app.include_router(scrape.router)
 app.include_router(voice.router)
+app.include_router(verify.router)
 
 
 @app.get("/")
@@ -69,5 +70,6 @@ async def root():
             "POST /scrape": "Scrape URL (body: url, refresh_cache?)",
             "GET /scrape": "Scrape URL (query: url)",
             "GET /health": "Health check",
+            "POST /verify": "News Truth – fact-check page or screenshot (body: url, content?, image_base64?)",
         },
     }

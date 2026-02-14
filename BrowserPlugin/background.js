@@ -40,6 +40,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     const url = message.url || "";
     const command = message.command || "";
     const pageContext = message.pageContext != null ? String(message.pageContext) : undefined;
+    const mainContent = message.mainContent != null ? String(message.mainContent) : undefined;
     if (!url || !command) {
       sendResponse({ ok: false, error: "Missing url or command", detail: "url and command are required" });
       return true;
@@ -47,6 +48,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     const body = { url, command };
     if (pageContext !== undefined) body.page_context = pageContext;
+    if (mainContent !== undefined && mainContent.length > 0) body.main_content = mainContent;
+    if (Array.isArray(message.conversation) && message.conversation.length > 0) {
+      body.conversation = message.conversation.map((m) => ({
+        role: m.role === "assistant" ? "assistant" : "user",
+        content: typeof m.content === "string" ? m.content : String(m.content ?? "")
+      }));
+    }
 
     fetch(`${API_BASE}/automate/`, {
       method: "POST",
@@ -69,8 +77,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
           return;
         }
-        // Backend returns script when validation passed; we run it in the user's tab (validate on server, execute on client)
-        if (!data.ok || !data.script) {
+        // Backend returns script when validation passed; we run it in the user's tab (validate on server, execute on client).
+        // For chat follow-up, backend may return ok with script=";" and commands=[] and connector_summary.
+        if (!data.ok || data.script == null) {
           const detail = (data.error || data.detail || "No script returned. Check backend logs or try again.").slice(0, 500);
           sendResponse({
             ok: false,
@@ -79,6 +88,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           });
           return;
         }
+        const commands = Array.isArray(data.commands) ? data.commands : [];
+        const useCommands = commands.length > 0;
+
+        // Chat follow-up: no commands to run; return success with connector reply for the sidebar to show.
+        if (!useCommands) {
+          sendResponse({
+            ok: true,
+            script: data.script,
+            commands: [],
+            connector_summary: data.connector_summary,
+            connector_error: data.connector_error
+          });
+          return;
+        }
+
         // Automation request comes from the sidebar on the active page; sender.tab.id is the most reliable.
         let tabId = sender.tab?.id;
         if (tabId == null) {
@@ -90,9 +114,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           return;
         }
         try {
-          const commands = Array.isArray(data.commands) ? data.commands : [];
-          const useCommands = commands.length > 0;
-
           if (useCommands) {
             // CSP-safe: run structured commands in ISOLATED world (no eval, no inline script).
             const runResult = await chrome.scripting.executeScript({
@@ -154,7 +175,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               setTimeout(() => toast.remove(), 2500);
             }
           });
-          sendResponse({ ok: true });
+          sendResponse({ ok: true, script: data.script, commands: data.commands, connector_summary: data.connector_summary, connector_error: data.connector_error });
         } catch (injectError) {
           sendResponse({
             ok: false,
@@ -175,6 +196,69 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         });
       });
 
+    return true;
+  }
+
+  // News Truth: verify page or screenshot (POST /verify)
+  if (message?.type === "interestlens:verify-truth") {
+    const url = message.url || "";
+    const content = message.content || "";
+    const includeScreenshot = !!message.includeScreenshot;
+
+    const doPost = (imageBase64) => {
+      const body = { url, content };
+      if (imageBase64) body.image_base64 = imageBase64;
+      fetch(`${API_BASE}/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      })
+        .then(async (response) => {
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            const detail = response.status === 404
+              ? "Verify endpoint not found. Restart the backend (run_backend.bat) so the News Truth feature is loaded."
+              : (data.detail || data.error || `Request failed (${response.status}).`);
+            sendResponse({
+              ok: false,
+              error: data.error || "Verify failed",
+              detail
+            });
+            return;
+          }
+          sendResponse({ ok: true, data });
+        })
+        .catch((error) => {
+          const msg = (error?.message || "").toLowerCase();
+          const detail = msg.includes("fetch") || msg.includes("network") || msg.includes("failed")
+            ? "Cannot reach backend on port 8001. Start it: run run_backend.bat in project folder."
+            : (error?.message || "Request failed");
+          sendResponse({ ok: false, error: "Backend unreachable", detail });
+        });
+    };
+
+    if (includeScreenshot) {
+      const tabId = sender.tab?.id;
+      const windowId = sender.tab?.windowId;
+      if (tabId == null || windowId == null) {
+        sendResponse({ ok: false, error: "No tab", detail: "Open the page you want to verify and try again." });
+        return true;
+      }
+      chrome.tabs.captureVisibleTab(windowId, { format: "png" }, (dataUrl) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ ok: false, error: "Screenshot failed", detail: chrome.runtime.lastError.message });
+          return;
+        }
+        if (!dataUrl || !dataUrl.startsWith("data:image")) {
+          sendResponse({ ok: false, error: "Screenshot failed", detail: "No image data." });
+          return;
+        }
+        const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, "");
+        doPost(base64);
+      });
+    } else {
+      doPost(null);
+    }
     return true;
   }
 

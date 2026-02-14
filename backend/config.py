@@ -26,7 +26,7 @@ def _optional(key: str, default: str | None = None) -> str | None:
     return str(v).strip()
 
 
-# --- Automation agent (ADK + Daytona + headless browser). Loaded lazily so app can start without these. ---
+# --- Automation agent (ADK + Daytona). Script runs in user's browser via extension. Loaded lazily. ---
 _automation_loaded = False
 GOOGLE_API_KEY: str | None = None
 ADK_MODEL: str | None = None
@@ -36,7 +36,6 @@ DAYTONA_API_KEY: str | None = None
 DAYTONA_API_URL: str | None = None
 DAYTONA_TARGET: str | None = None
 DAYTONA_SANDBOX_LANGUAGE: str | None = None
-HEADLESS_BROWSER_TIMEOUT_MS: int = 15000
 
 # --- Composio (optional "Bridge" for Gmail, Notion, Calendar, etc.) ---
 
@@ -55,7 +54,6 @@ def ensure_automation_config() -> None:
     """Load automation env once. Call before using /automate. Raises if required keys missing."""
     global _automation_loaded, GOOGLE_API_KEY, ADK_MODEL, AUTOMATION_MAX_ITERATIONS
     global SANDBOX_TIMEOUT_SECONDS, DAYTONA_API_KEY, DAYTONA_API_URL, DAYTONA_TARGET, DAYTONA_SANDBOX_LANGUAGE
-    global HEADLESS_BROWSER_TIMEOUT_MS
     if _automation_loaded:
         return
     GOOGLE_API_KEY = _required("GOOGLE_API_KEY")
@@ -68,9 +66,43 @@ def ensure_automation_config() -> None:
     DAYTONA_API_URL = _optional("DAYTONA_API_URL")
     DAYTONA_TARGET = _optional("DAYTONA_TARGET")
     DAYTONA_SANDBOX_LANGUAGE = _required("DAYTONA_SANDBOX_LANGUAGE")
-    raw = _optional("HEADLESS_BROWSER_TIMEOUT_MS", "15000")
-    try:
-        HEADLESS_BROWSER_TIMEOUT_MS = int(raw) if raw else 15000
-    except (TypeError, ValueError):
-        HEADLESS_BROWSER_TIMEOUT_MS = 15000
     _automation_loaded = True
+
+
+# --- News Truth (Verify Truth: Bem extraction, Fact Hunter, Truth Judge) ---
+BEM_API_KEY: str | None = None
+BEM_API_BASE: str = "https://api.bem.ai"
+BEM_TRANSFORM_FUNCTION: str = "transform"  # function name for document/image extraction
+TAVILY_API_KEY: str | None = None
+
+# Trusted domains for fact-checking (Fact Hunter restricts search to these)
+TRUTH_TRUSTED_DOMAINS = [
+    "reuters.com",
+    "apnews.com",
+    "bbc.com",
+    "bbc.co.uk",
+    "nature.com",
+    "npr.org",
+    "pbs.org",
+    "theguardian.com",
+    "nytimes.com",
+    "washingtonpost.com",
+    "politifact.com",
+    "factcheck.org",
+    "snopes.com",
+]
+
+
+def ensure_truth_config() -> None:
+    """Load Truth feature env. Call before using /verify. Raises if required keys missing."""
+    global BEM_API_KEY, BEM_API_BASE, BEM_TRANSFORM_FUNCTION, TAVILY_API_KEY
+    BEM_API_KEY = _optional("BEM_API_KEY")
+    BEM_API_BASE = _optional("BEM_API_BASE", "https://api.bem.ai") or "https://api.bem.ai"
+    BEM_TRANSFORM_FUNCTION = _optional("BEM_TRANSFORM_FUNCTION", "transform") or "transform"
+    TAVILY_API_KEY = _optional("TAVILY_API_KEY")
+    # Truth pipeline needs at least: Gemini (for Judge and optional fallback extraction) and one of Bem or Tavily
+    # We require GOOGLE_API_KEY for Judge; Bem is optional (we have Gemini fallback); Tavily required for search
+    if not os.getenv("GOOGLE_API_KEY", "").strip():
+        raise RuntimeError("Truth feature requires GOOGLE_API_KEY (for Truth Judge).")
+    if not TAVILY_API_KEY:
+        raise RuntimeError("Truth feature requires TAVILY_API_KEY (for Fact Hunter search).")

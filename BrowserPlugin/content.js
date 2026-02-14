@@ -47,6 +47,8 @@
     mic: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`,
     check: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>`,
     alert: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>`,
+    shield: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>`,
+    camera: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>`,
     warning: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
     empty: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`
   };
@@ -120,21 +122,26 @@
     <div class="il-logo"><img src="${chrome.runtime.getURL("icons/icon48.png")}" alt="" class="il-logo-img" /></div>
     <div class="il-title">Lucid Browsing</div>
     <div class="il-header-actions">
+      <button class="il-btn" id="il-verify-truth-btn" type="button" aria-label="Verify Truth" title="Verify Truth (page)">${ICONS.shield}</button>
+      <button class="il-btn" id="il-verify-screenshot-btn" type="button" aria-label="Verify screenshot" title="Verify screenshot">${ICONS.camera}</button>
       <button class="il-btn" id="il-refresh-btn" type="button" aria-label="Refresh">${ICONS.refresh}</button>
     </div>
   `;
 
-  // Automation section (command input + Run)
-  const automationSection = document.createElement("div");
-  automationSection.className = "il-automation";
-  automationSection.innerHTML = `
-    <label class="il-automation-label">Automate this page</label>
-    <div class="il-automation-row">
-      <input type="text" id="il-automate-input" class="il-automate-input" placeholder="e.g. Click the login button" />
-      <button type="button" id="il-automate-run" class="il-btn il-automate-run" aria-label="Run">Run</button>
-      <button type="button" id="il-automate-voice" class="il-btn il-automate-voice" aria-label="Voice">${ICONS.mic}</button>
+  // Chat section (messages + input for automation and Composio follow-up)
+  const chatSection = document.createElement("div");
+  chatSection.className = "il-chat-section";
+  chatSection.innerHTML = `
+    <label class="il-automation-label">Chat – automate or save to Docs/email</label>
+    <div id="il-chat-messages" class="il-chat-messages" role="log" aria-live="polite"></div>
+    <div class="il-chat-footer">
+      <div class="il-chat-input-row">
+        <input type="text" id="il-automate-input" class="il-automate-input il-chat-input" placeholder="e.g. Click login, or save this post to Google Doc" />
+        <button type="button" id="il-automate-run" class="il-btn il-automate-run" aria-label="Send">Send</button>
+        <button type="button" id="il-automate-voice" class="il-btn il-automate-voice" aria-label="Voice">${ICONS.mic}</button>
+      </div>
+      <div id="il-automate-status" class="il-automate-status" aria-live="polite"></div>
     </div>
-    <div id="il-automate-status" class="il-automate-status" aria-live="polite"></div>
   `;
 
   // Body (cards from scrape)
@@ -143,7 +150,7 @@
 
   // Assemble
   wrapper.appendChild(header);
-  wrapper.appendChild(automationSection);
+  wrapper.appendChild(chatSection);
   wrapper.appendChild(body);
   shadowRoot.appendChild(styleLink);
   shadowRoot.appendChild(wrapper);
@@ -199,7 +206,10 @@
   toggleBtn.addEventListener("click", toggleSidebar);
 
   const refreshBtn = shadowRoot.getElementById("il-refresh-btn");
+  const verifyTruthBtn = shadowRoot.getElementById("il-verify-truth-btn");
+  const verifyScreenshotBtn = shadowRoot.getElementById("il-verify-screenshot-btn");
 
+  const chatMessages = shadowRoot.getElementById("il-chat-messages");
   const automateInput = shadowRoot.getElementById("il-automate-input");
   const automateRunBtn = shadowRoot.getElementById("il-automate-run");
   const automateVoiceBtn = shadowRoot.getElementById("il-automate-voice");
@@ -210,7 +220,10 @@
     shadowRoot,
     body,
     refreshBtn,
+    verifyTruthBtn,
+    verifyScreenshotBtn,
     toggleBtn,
+    chatMessages,
     automateInput,
     automateRunBtn,
     automateVoiceBtn,
